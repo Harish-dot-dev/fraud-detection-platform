@@ -11,8 +11,8 @@ component by component and is filled in as each phase lands.
 | Spark Structured Streaming (`streaming/`) | 2–3 | done (Bronze + online features) |
 | Shared feature definitions (`features/`) | 3 | done (online + offline, consistency-tested) |
 | Medallion layers (Bronze / Silver / Gold) | 2–3 | done |
-| Chargeback label simulation | 4 | not started |
-| Point-in-time training set builder (`training/`) | 4 | not started |
+| Chargeback label simulation | 4 | done |
+| Point-in-time training set builder (`training/`) | 4 | done (leakage-tested) |
 | XGBoost model + MLflow registry | 5 | not started |
 | Rules engine (`rules/`) | 6 | not started |
 | Scoring API (`serving/`) | 6 | skeleton: `GET /health` |

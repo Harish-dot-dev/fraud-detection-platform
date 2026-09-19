@@ -142,9 +142,7 @@ def test_device_tracking_stays_within_the_online_bound(
 
     from features.definitions import MAX_TRACKED_DEVICES
 
-    silver = bronze_to_silver(
-        bronze_dataframe(spark, sample_transactions, sample_identity), SALT
-    )
+    silver = bronze_to_silver(bronze_dataframe(spark, sample_transactions, sample_identity), SALT)
     worst = (
         silver.groupBy("card_token")
         .agg(F.countDistinct("device_info").alias("devices"))

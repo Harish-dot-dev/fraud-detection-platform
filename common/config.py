@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     delta_silver_path: str = "data/delta/silver"
     delta_gold_path: str = "data/delta/gold"
     delta_decisions_path: str = "data/delta/decisions"
+    # Labels arrive late, so they live in their own table rather than being
+    # glued onto the payment data (see training/chargebacks.py).
+    delta_chargebacks_path: str = "data/delta/chargebacks"
+    delta_training_path: str = "data/delta/training"
     duckdb_path: str = "data/warehouse/fraud.duckdb"
 
     # --- PII ---

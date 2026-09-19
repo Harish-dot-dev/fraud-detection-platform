@@ -240,6 +240,68 @@ The Silver job refuses to write a table that fails its suite, rather than writin
 
 ---
 
+## Phase 4 — Labels and training data
+
+### Labels arrive weeks late, and the platform models that
+
+In production nobody knows a payment was fraudulent when it happens. They find out when the
+cardholder disputes it and the chargeback works through the scheme — typically 7 to 60 days later.
+Legitimate payments are never confirmed at all; they are *presumed* good once the dispute window
+closes.
+
+The dataset hands us `isFraud` immediately, so `training/chargebacks.py` puts the delay back: fraud
+gets a chargeback date inside the dispute window, everything else matures after 60 quiet days. The
+label table is the only place in the platform that reads `isFraud`, and nothing on the streaming or
+scoring path can see it.
+
+Measured on the 1000-row fixture, which is exactly the behaviour being modelled:
+
+| Training date | Labels known | Fraud rate among known |
+|---|---|---|
+| day of the last payment | 0 (0%) | — |
+| + 10 days | 2 (0.2%) | 1.000 |
+| + 30 days | 16 (1.6%) | 1.000 |
+| + 61 days | 1000 (100%) | 0.035 |
+
+The middle rows are the point. Thirty days after the fact, the only labels in hand are chargebacks
+— so a training set built from "everything we know" is **100% fraud**. Train on that and the model
+learns that every payment is fraudulent. The true rate is 3.5%.
+
+### Delays are derived from the transaction ID, not drawn from a generator
+
+Airflow loads this table a day at a time (phase 7). If a payment's delay came from a running RNG,
+the timeline would shift every time the table was rebuilt, and every point-in-time guarantee with
+it. Hashing `(seed, transaction_id)` gives the same answer whether the table is built in one pass
+or in sixty daily chunks — there is a test for exactly that.
+
+### Two policies for immature payments, because real teams disagree
+
+On any training date, recent payments have no usable label yet. Two defensible choices, both
+implemented:
+
+* **`exclude`** (default) — leave them out. Honest, throws data away.
+* **`assume_legitimate`** — include them as non-fraud, which is what a system that trusts "no
+  dispute yet" effectively does.
+
+Measured on the fixture at +30 days: `exclude` gives 16 rows at a 100% fraud rate; 
+`assume_legitimate` gives 1000 rows at 1.6%, of which 984 labels are assumed — and 19 genuine
+frauds are sitting in there labelled legitimate. Neither is free. The assumed rows carry a
+`label_is_assumed` flag so the choice stays visible instead of being baked into the numbers.
+
+### Point-in-time correctness has two halves
+
+Feature leakage and label leakage are different defects and both are tested:
+
+* **Features** — everything in Gold comes from a window ending at the payment's own timestamp.
+  `test_features_do_not_change_when_later_payments_arrive` builds Gold over 150 payments and then
+  over 300, and requires the first 150 rows to be byte-identical. A feature that looked forward —
+  a card average over the whole file, a count with no upper bound — would move.
+* **Labels** — a row is only included when `label_available_at <= as_of`. The test finds a fraud
+  confirmed 50 days out, asserts it is absent from a model trained at 30 days, and then asserts it
+  *is* present at 61 days: deferred, not discarded.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.

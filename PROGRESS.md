@@ -8,13 +8,67 @@ phase.
 | 1. Foundation | ✅ done |
 | 2. Streaming ingestion | ✅ done |
 | 3. Features | ✅ done |
-| 4. Labels and training data | ⬜ not started |
+| 4. Labels and training data | ✅ done |
 | 5. Model | ⬜ not started |
 | 6. Serving | ⬜ not started |
 | 7. Orchestration and analytics | ⬜ not started |
 | 8. GenAI assistant | ⬜ not started |
 | 9. Analyst app and dashboard | ⬜ not started |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 4 — Labels and training data ✅
+
+### What is in place
+
+- **`training/chargebacks.py`** — the delayed label simulation. Fraud is confirmed by a chargeback
+  7–60 days after the payment; everything else is presumed legitimate after 60 quiet days. The
+  delay is derived from the transaction ID, so loading the table a day at a time produces exactly
+  the same timeline as building it in one pass.
+- **`training/build_labels.py`** (`make labels`) — writes the chargeback Delta table. The only
+  place in the platform that reads `isFraud`.
+- **`training/dataset.py`** (`make dataset`) — the point-in-time training set builder: a payment is
+  included only when it has happened *and* its label had arrived by the training date. Two
+  policies for immature payments (`exclude`, `assume_legitimate`), with assumed labels flagged.
+- **`tests/test_point_in_time.py`** — the leakage tests, covering both feature leakage and label
+  leakage, each demonstrating the failure it prevents.
+
+### How to run it
+
+```bash
+make labels                              # build the chargeback table
+make dataset                             # point-in-time training set at "now"
+make dataset ARGS="--as-of 2023-04-01"   # or as of any date
+make dataset ARGS="--immature-policy assume_legitimate"
+```
+
+### Verified
+
+Run on 2026-09-19 (Spark 3.5.3 on Java 17). Measured on the 1000-row fixture:
+
+| Training date | Labels known | Fraud rate among known |
+|---|---|---|
+| day of the last payment | 0 (0%) | — |
+| + 10 days | 2 (0.2%) | 1.000 |
+| + 30 days | 16 (1.6%) | 1.000 |
+| + 61 days | 1000 (100%) | 0.035 |
+
+Training sets built from those: at +30 days `exclude` gives **16 rows, all fraud**;
+`assume_legitimate` gives **1000 rows at 1.6% fraud with 984 assumed labels**; at +61 days,
+**1000 rows at 3.50% fraud** — the true rate.
+
+- Fast suite — **100 passed**.
+- Spark suite — **54 passed**, including 10 point-in-time tests.
+- `make lint` — clean.
+
+### Known issues / deliberate gaps
+
+- The fixture covers half a day, so every payment matures at the same moment and a +30 day training
+  set is 100% fraud. On the real six-month dataset the immature window is only the tail. Worth
+  remembering before reading anything into a fixture-based training set.
+- The training set is a full rebuild per `as_of`. Correct; not incremental.
+- Nothing is trained yet — that is phase 5.
 
 ---
 

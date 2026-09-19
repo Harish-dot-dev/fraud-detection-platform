@@ -14,7 +14,7 @@ COMPOSE := docker compose
 
 .PHONY: help env install lint fmt test test-all sample data up up-ai down ps logs \
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
-	      silver gold quality features \
+	      silver gold quality features labels dataset \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -122,6 +122,12 @@ quality: ## Run the Great Expectations suite against Silver -> reports/
 
 features: silver gold ## Build Silver and Gold in one go
 
+labels: ## Build the chargeback table (labels, with their real arrival delay)
+	$(COMPOSE) run --rm spark python -m training.build_labels
+
+dataset: ## Build a point-in-time training set. e.g. make dataset ARGS="--as-of 2023-04-01"
+	$(COMPOSE) run --rm spark python -m training.dataset $(ARGS)
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -137,7 +143,6 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 
 # ---------------------------------------------------------------------------
 # Targets below arrive with their phase:
-#   labels             (phase 4)   simulate chargeback arrival
 #   train              (phase 5)   train + register the model
 #   load-test          (phase 6)   measure /score latency -> reports/latency.json
 #   airflow / dbt      (phase 7)

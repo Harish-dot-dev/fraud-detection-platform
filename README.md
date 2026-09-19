@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 3 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 4 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
