@@ -1,0 +1,75 @@
+name: CI
+
+# The point of the synthetic fixture is that CI needs no Kaggle account, no
+# Docker services and no GPU. Keep it that way: if a test needs Kafka, Redis,
+# Spark or Ollama, mark it (needs_spark / needs_ollama / slow) instead of
+# adding a service here.
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+# A new push to the same branch cancels the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        # Pinned to the same version as the dev dependency group so that a
+        # local `make lint` and CI can never disagree.
+        run: pip install ruff==0.7.2
+
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: Tests (pytest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ml,dev]"
+
+      - name: Run the fast test suite
+        run: pytest -m "not slow and not needs_spark and not needs_ollama" --cov=. --cov-report=term-missing
+
+      - name: Check the committed fixture is up to date
+        # Regenerating with the documented arguments must produce no diff.
+        run: |
+          python scripts/make_synthetic_sample.py --rows 1000 --out tests/fixtures
+          git diff --exit-code tests/fixtures
+
+  compose:
+    name: docker compose config
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the Compose file and its profiles
+        run: |
+          cp .env.example .env
+          docker compose --profile core --profile ai config --quiet
+          echo "Compose file is valid."

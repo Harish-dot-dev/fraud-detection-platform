@@ -1,0 +1,127 @@
+# Single source of truth for Python dependencies and tooling config.
+#
+# Dependencies are split into optional groups so that each container installs only
+# what it needs. The GenAI group in particular drags in torch (~2 GB) via
+# sentence-transformers, which has no business inside the low-latency scoring image.
+#
+# Every version is pinned exactly (== not >=) so that a clone six months from now
+# resolves to the same packages this was built and measured against.
+
+[build-system]
+requires = ["setuptools==75.3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fraud-detection-platform"
+version = "0.1.0"
+description = "Real-time payment fraud detection platform: streaming features, rules + XGBoost scoring, and a grounded GenAI analyst assistant."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+
+# Core: everything the scoring path and the shared feature definitions need.
+dependencies = [
+    "pandas==2.2.3",
+    # numpy is held below 2.0 because PySpark 3.5 and several of the ML pins
+    # (shap, evidently) still build against the 1.x ABI.
+    "numpy==1.26.4",
+    "pyarrow==17.0.0",
+    "duckdb==1.1.3",
+    "redis==5.2.0",
+    "confluent-kafka==2.6.0",
+    "fastapi==0.115.4",
+    "uvicorn[standard]==0.32.0",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.6.1",
+    "PyYAML==6.0.2",
+    "python-dotenv==1.0.1",
+]
+
+[project.optional-dependencies]
+# Model training, tracking and drift monitoring.
+ml = [
+    "xgboost==2.1.2",
+    "scikit-learn==1.5.2",
+    "shap==0.46.0",
+    "mlflow==2.17.2",
+    "evidently==0.4.40",
+    "matplotlib==3.9.2",
+]
+# Spark Structured Streaming + Delta Lake. Requires Java 17 on the host.
+spark = [
+    "pyspark==3.5.3",
+    "delta-spark==3.2.1",
+]
+# Local LLM assistant: embeddings, retrieval, prompting.
+genai = [
+    "sentence-transformers==3.2.1",
+    "langchain==0.3.7",
+    "langchain-community==0.3.5",
+    "langchain-ollama==0.2.0",
+    "psycopg[binary]==3.2.3",
+    "pgvector==0.3.6",
+]
+# Data quality suites.
+quality = [
+    "great-expectations==0.18.22",
+]
+# Warehouse transformations.
+dbt = [
+    "dbt-core==1.8.8",
+    "dbt-duckdb==1.8.4",
+    "duckdb-engine==0.13.2",
+]
+# Analyst review app and the Streamlit metrics page.
+app = [
+    "streamlit==1.39.0",
+    "plotly==5.24.1",
+]
+# Test and lint toolchain. fakeredis lets the online feature store be tested
+# without a running Redis, which is what makes CI free of infrastructure.
+dev = [
+    "ruff==0.7.2",
+    "pytest==8.3.3",
+    "pytest-cov==6.0.0",
+    "httpx==0.27.2",
+    "fakeredis==2.26.1",
+    "freezegun==1.5.1",
+]
+
+[tool.setuptools]
+# The repository is organised as top-level component packages rather than a
+# single src/ package, so that each pipeline stage is obvious from the tree.
+packages = [
+    "common",
+    "features",
+    "serving",
+    "producer",
+    "streaming",
+    "training",
+    "genai",
+    "eval",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+]
+
+[tool.pytest.ini_options]
+# pythonpath = "." lets tests import the top-level component packages
+# (features, serving, ...) without an editable install step.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: tests that take more than a few seconds (excluded from the fast CI job)",
+    "needs_spark: requires a local Spark session and Java 17",
+    "needs_ollama: requires a running Ollama server with the configured model pulled",
+]

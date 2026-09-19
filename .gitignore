@@ -216,3 +216,34 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# Project-specific
+# ---------------------------------------------------------------------------
+
+# The IEEE-CIS dataset is competition data and must not be redistributed.
+# Everything generated from it (Delta tables, DuckDB warehouse, MLflow store)
+# also stays out of Git.
+data/
+
+# Generated metric reports. Only the measured JSON/HTML files a run produces
+# live here; the directory itself is tracked via .gitkeep so scripts can write
+# into a fresh clone.
+reports/*
+!reports/.gitkeep
+
+# Local environment and virtualenv
+.env
+.venv/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# Airflow
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+
+# Ruff / pytest caches are covered by the Python defaults above.

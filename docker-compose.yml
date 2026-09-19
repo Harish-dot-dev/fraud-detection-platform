@@ -1,0 +1,189 @@
+# ---------------------------------------------------------------------------
+# Fraud detection platform - local stack.
+#
+# Profiles let you run a subset on a small machine (see the table in README.md):
+#   core          kafka, redis, mlflow, api        ~4.0 GB
+#   ai            ollama, pgvector                 ~4.5 GB
+#   orchestration airflow + its metadata database  (added in phase 7)
+#   dashboard     superset                         (added in phase 9)
+#
+#   make up            -> core only
+#   make up-ai         -> core + ai
+#   docker compose --profile core --profile ai up -d
+#
+# Every service has an explicit mem_limit. On a 16 GB laptop, core + ai is the
+# intended maximum; running orchestration and dashboard at the same time is not.
+# ---------------------------------------------------------------------------
+
+name: fraud-platform
+
+services:
+
+  # --- Streaming backbone ---------------------------------------------------
+  # Kafka in KRaft mode: no ZooKeeper, single combined broker+controller node.
+  kafka:
+    image: apache/kafka:3.8.1
+    container_name: fraud-kafka
+    profiles: ["core"]
+    ports:
+      # 29092 is the listener for clients running on your laptop (outside Docker).
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Single-node cluster: one replica of everything, and no rebalance delay.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xmx768m -Xms512m
+      CLUSTER_ID: fraud-platform-local-0001
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1536m
+    restart: unless-stopped
+
+  # --- Online feature store -------------------------------------------------
+  # Redis holds the per-card rolling features that /score reads on every request.
+  # It is a cache, not a system of record: the Delta gold tables are the truth,
+  # so `maxmemory-policy allkeys-lru` is safe and keeps memory bounded.
+  redis:
+    image: redis:7.4.1-alpine
+    container_name: fraud-redis
+    profiles: ["core"]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "384mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # --- Experiment tracking and model registry -------------------------------
+  # SQLite backend + local artifact directory: no external database needed.
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.2
+    container_name: fraud-mlflow
+    profiles: ["core"]
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data/mlflow:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    mem_limit: 1024m
+    restart: unless-stopped
+
+  # --- Scoring API ----------------------------------------------------------
+  # The repository is bind-mounted so code changes reload without a rebuild.
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: fraud-platform/api:0.1.0
+    container_name: fraud-api
+    profiles: ["core"]
+    command: ["uvicorn", "serving.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Inside the network these hostnames resolve to the service names above.
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - ./:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    mem_limit: 1024m
+    restart: unless-stopped
+
+  # --- Local LLM ------------------------------------------------------------
+  # The model itself is NOT baked into the image. After `make up-ai`, run
+  # `make ollama-pull` once to download llama3.2:3b (~2 GB) into the volume.
+  ollama:
+    image: ollama/ollama:0.5.4
+    container_name: fraud-ollama
+    profiles: ["ai"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    mem_limit: 4096m
+    restart: unless-stopped
+
+  # --- Vector store for past fraud cases ------------------------------------
+  pgvector:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: fraud-pgvector
+    profiles: ["ai"]
+    environment:
+      POSTGRES_DB: ${PGVECTOR_DB:-fraud_cases}
+      POSTGRES_USER: ${PGVECTOR_USER:-fraud}
+      POSTGRES_PASSWORD: ${PGVECTOR_PASSWORD:-fraud_local_dev_only}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgvector-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGVECTOR_USER:-fraud} -d ${PGVECTOR_DB:-fraud_cases}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # --- Services added in later phases ---------------------------------------
+  # spark            (phase 2) streaming job container
+  # airflow + db     (phase 7) profile: orchestration
+  # analyst-app      (phase 9) profile: ai
+  # superset         (phase 9) profile: dashboard
+  # They are deliberately absent until the code they run exists, so that
+  # `docker compose up` never starts a container that cannot do anything.
+
+volumes:
+  kafka-data:
+  ollama-models:
+  pgvector-data:
