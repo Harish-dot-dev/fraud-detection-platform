@@ -14,6 +14,7 @@ COMPOSE := docker compose
 
 .PHONY: help env install lint fmt test test-all sample data up up-ai down ps logs \
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
+	      silver gold quality features \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -110,6 +111,17 @@ stream-once: ## Drain the topic into Bronze Delta and exit (runs in the spark co
 stream-local: ## Run the Bronze job from this venv (needs `pip install -e '.[spark]'` + Java 17)
 	$(PY) -m streaming.bronze --bootstrap-servers localhost:29092 $(ARGS)
 
+silver: ## Build the Silver layer from Bronze (dedupe, tokenise, quality checks)
+	$(COMPOSE) run --rm spark python -m streaming.silver
+
+gold: ## Build the Gold offline feature table from Silver
+	$(COMPOSE) run --rm spark python -m streaming.gold
+
+quality: ## Run the Great Expectations suite against Silver -> reports/
+	$(COMPOSE) run --rm spark python -m quality.expectations
+
+features: silver gold ## Build Silver and Gold in one go
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -125,7 +137,6 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 
 # ---------------------------------------------------------------------------
 # Targets below arrive with their phase:
-#   features           (phase 3)   build silver + gold feature tables
 #   labels             (phase 4)   simulate chargeback arrival
 #   train              (phase 5)   train + register the model
 #   load-test          (phase 6)   measure /score latency -> reports/latency.json

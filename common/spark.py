@@ -9,6 +9,9 @@ timezone will silently produce different windows.
 
 from __future__ import annotations
 
+import logging
+import os
+import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - import cost only paid at runtime
@@ -16,7 +19,14 @@ if TYPE_CHECKING:  # pragma: no cover - import cost only paid at runtime
 
 # Pinned to match the pyspark version in pyproject.toml. A mismatch between the
 # Kafka connector and Spark itself fails at runtime with an unhelpful error.
+logger = logging.getLogger(__name__)
+
 SPARK_VERSION = "3.5.3"
+# Spark 3.5 supports Java 8, 11 and 17. On Java 21 a session starts and simple
+# queries work, but Arrow-based pandas UDFs fail deep in the executor with
+# "sun.misc.Unsafe or java.nio.DirectByteBuffer.<init>(long, int) not
+# available" - a confusing error a long way from its cause, hence the warning.
+MAX_SUPPORTED_JAVA_VERSION = 17
 SCALA_BINARY_VERSION = "2.12"
 KAFKA_PACKAGE = f"org.apache.spark:spark-sql-kafka-0-10_{SCALA_BINARY_VERSION}:{SPARK_VERSION}"
 
@@ -39,6 +49,14 @@ def build_spark_session(
     """
     from delta import configure_spark_with_delta_pip
     from pyspark.sql import SparkSession
+
+    # Spark launches its Python workers with whatever `python3` is on PATH,
+    # which in a virtualenv is the wrong interpreter: the worker then fails
+    # with "No module named pandas" the first time a UDF runs. Pointing both
+    # ends at the interpreter running this code is the fix, and doing it here
+    # means no caller has to remember it.
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
     builder = SparkSession.builder.appName(app_name)
     if master:
@@ -69,4 +87,23 @@ def build_spark_session(
     elif packages:
         builder = builder.config("spark.jars.packages", ",".join(packages))
 
-    return builder.getOrCreate()
+    session = builder.getOrCreate()
+    _warn_about_unsupported_java(session)
+    return session
+
+
+def _warn_about_unsupported_java(session: SparkSession) -> None:
+    """Warn early if the JVM is newer than Spark 3.5 supports."""
+    try:
+        version = session.sparkContext._jvm.System.getProperty("java.version")
+        major = int(version.split(".")[0])
+    except Exception:  # pragma: no cover - diagnostics only
+        return
+
+    if major > MAX_SUPPORTED_JAVA_VERSION:
+        logger.warning(
+            "Java %s detected. Spark %s supports Java 17 and below; pandas UDFs "
+            "will fail on this JVM. Set JAVA_HOME to a Java 17 installation.",
+            version,
+            SPARK_VERSION,
+        )

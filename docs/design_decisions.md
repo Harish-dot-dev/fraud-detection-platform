@@ -144,6 +144,102 @@ base image or runner ships.
 
 ---
 
+## Phase 3 — Features
+
+### One definition, two implementations, reconciled by a test
+
+`features/definitions.py` is the only place a feature is defined. The online path folds payments
+into a state object one at a time; the offline path expresses the same definitions as Spark window
+functions, because folding 590k rows in Python would take minutes and would not parallelise.
+
+Two implementations of one definition is exactly how training/serving skew gets into a system: the
+model learns from one set of numbers and is served another, and nothing fails — the model just
+quietly gets worse. So `tests/test_feature_consistency.py` computes the features for the same
+payments both ways and asserts every one of the 18 matches to within 1e-6, per feature, so a
+failure names the one that drifted.
+
+### Redis stores *state*, not features
+
+The obvious design is to precompute features and cache them. It is wrong here: a feature like
+"payments on this card in the last 10 minutes" includes the payment being scored, and that payment
+does not exist until the request arrives. So Redis holds the card's history, and the API computes
+the features on top of it with the same function the batch path uses.
+
+This is also why the scoring path is not a straight cache read — it is a cache read plus a
+deterministic computation, which is the part the consistency test protects.
+
+### Sentinel values rather than NaN
+
+`seconds_since_card_last_txn` is `-1` on a card's first payment. NaN would hide the difference
+between "this card has no history" and "this value is missing", and those mean very different
+things to a fraud model. XGBoost splits on a distinctive sentinel perfectly well.
+
+### "New device" means nothing on a card's first payment
+
+On a card the platform has never seen, every device is unfamiliar. Flagging that would make every
+new card look suspicious, which is both useless and unfair to new customers. The novelty features
+only fire once the card has history.
+
+### Tokenisation: HMAC, and the identifying columns go too
+
+The card key comes from a small space — a few thousand `card1` values, a few hundred `addr1`, about
+sixty email domains. A plain SHA-256 of that is reversible by anyone willing to generate every
+combination, so the token is an **HMAC** under a secret salt.
+
+Tokenising is pointless if the columns the key was built from survive alongside it, so Silver drops
+`card1`, `card2`, `addr1` and `addr2`. **This costs model performance** — `card1` is one of the
+stronger raw features in this dataset — and it is the right trade for a system handling real
+payments: the model gets the card's *behaviour* through the per-card features instead of its
+identity. The email domain stays, because a domain on its own (sixty values, one of them
+`anonymous.com`) identifies nobody and is genuinely predictive.
+
+### The known divergence: bounded device tracking
+
+Redis keeps the 20 most recent distinct devices per card; the offline window keeps all of them. For
+a card with more than 20 distinct devices the two implementations could disagree.
+
+Rather than pretend this is not there, a test asserts that no card in the data comes near the
+bound. If that ever changes, the test fails and the divergence gets dealt with instead of silently
+skewing a model.
+
+### One streaming job writes Bronze *and* the online store
+
+Two separate jobs would mean two Spark drivers, two JVM heaps and two reads of the same topic —
+which does not fit on a 16 GB laptop. So one `foreachBatch` does both, Bronze first: if the Redis
+update fails, the raw events are already durable and the state can be rebuilt from them. On a real
+cluster these would be separate applications, so that a problem in the feature writer could not
+stall ingestion.
+
+State updates are not commutative ("was this device seen before?" depends on what came earlier), so
+each batch is repartitioned by card and sorted within the partition before the fold.
+
+### Both ends of a feature window are bounded
+
+The trailing windows exclude events *after* the payment being scored, not just before the cutoff.
+In the online path state only ever holds earlier payments, so the upper bound looks redundant — but
+"cannot happen" is how leaks get in, and a late-arriving payment folded in after a newer one would
+otherwise see its own future.
+
+### Great Expectations: the column set is the real check
+
+The most valuable expectation in the Silver suite is `expect_table_columns_to_match_set` with
+`exact_match=True`. Value-level checks would never notice `card1` reappearing in Silver; the column
+contract fails immediately. A data-protection regression becomes a red CI job.
+
+The Silver job refuses to write a table that fails its suite, rather than writing it and warning.
+
+### Two Spark gotchas, both now handled in `common/spark.py`
+
+- **`PYSPARK_PYTHON`.** Spark launches Python workers with whatever `python3` is on PATH, which in
+  a virtualenv is the wrong interpreter; the first pandas UDF then dies with "No module named
+  pandas". The session builder points both ends at `sys.executable`.
+- **Java 17, verified.** On Java 21 a session starts and ordinary queries work, but Arrow-based
+  pandas UDFs fail with `sun.misc.Unsafe or java.nio.DirectByteBuffer.<init>(long, int) not
+  available` — confirmed by running the Silver tests on both JVMs. The Docker image and CI pin
+  Temurin 17, and the session builder warns if it finds anything newer.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.
@@ -155,14 +251,14 @@ fixed reference date (`SYNTHETIC_EPOCH`, default 2023-01-01) so the data has a r
 the windowed features, the chargeback delay simulation and the time-based split all need. The
 absolute dates are fictional; the intervals between transactions are real.
 
-### Card identity proxy (phase 3)
+### Card identity proxy (implemented in phase 3)
 
 The dataset has no card identifier. The pipeline uses `card1 + addr1 + P_emaildomain`, a widely
 used proxy for this dataset. It is imperfect in both directions — one card with two billing
 addresses looks like two cards, and two cards sharing a household address and email domain can
 collapse into one. It is documented as an approximation rather than presented as ground truth.
 
-### Feature freshness at scoring time (phase 3 / 6)
+### Feature freshness at scoring time (implemented in phase 3; used by the API in phase 6)
 
 Spark writes rolling per-card aggregates to Redis in micro-batches, so there is always a few
 seconds of lag. If `/score` read Redis alone, the feature "transactions on this card in the last

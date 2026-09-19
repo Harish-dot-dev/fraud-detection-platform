@@ -152,6 +152,16 @@ def parse_payment_events(raw: DataFrame) -> DataFrame:
     )
 
 
+def write_bronze_batch(events: DataFrame, path: str) -> None:
+    """Append one micro-batch to the Bronze table.
+
+    Used by the combined streaming job in ``streaming/features.py``, which
+    writes Bronze and updates the online feature store from the same batch
+    rather than reading Kafka twice.
+    """
+    events.write.format("delta").mode("append").partitionBy("event_date").save(path)
+
+
 def write_bronze_stream(
     events: DataFrame,
     path: str,

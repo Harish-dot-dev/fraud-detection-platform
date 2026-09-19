@@ -86,9 +86,10 @@ services:
     mem_limit: 512m
 
   # --- Stream processing ----------------------------------------------------
-  # Runs the Bronze ingest continuously: Kafka -> parsed events -> Delta.
-  # Starting it with the stack means `docker compose up` really does bring up
-  # the whole pipeline; it simply waits until the producer sends something.
+  # Runs the online pipeline continuously: Kafka -> Bronze Delta, and the same
+  # micro-batch folded into each card's state in Redis. Starting it with the
+  # stack means `docker compose up` really does bring up the whole pipeline; it
+  # simply waits until the producer sends something.
   spark:
     build:
       context: .
@@ -96,7 +97,7 @@ services:
     image: fraud-platform/spark:0.1.0
     container_name: fraud-spark
     profiles: ["core"]
-    command: ["python", "-m", "streaming.bronze"]
+    command: ["python", "-m", "streaming.features"]
     ports:
       # Spark UI for the running job - useful for showing micro-batch timings.
       - "4040:4040"
@@ -104,6 +105,7 @@ services:
       - .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
     volumes:
       - ./:/app
     depends_on:
@@ -111,6 +113,8 @@ services:
         condition: service_healthy
       kafka-setup:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     # Spark's JVM plus a local executor. The single biggest consumer in the
     # core profile, and the first thing to cut on a smaller machine.
     mem_limit: 3072m

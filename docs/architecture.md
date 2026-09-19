@@ -8,9 +8,9 @@ component by component and is filled in as each phase lands.
 | Component | Phase | Status |
 |---|---|---|
 | Kafka producer (`producer/`) | 2 | done |
-| Spark Structured Streaming (`streaming/`) | 2–3 | Bronze ingest done; features in phase 3 |
-| Shared feature definitions (`features/`) | 3 | not started |
-| Medallion layers (Bronze / Silver / Gold) | 2–3 | Bronze done |
+| Spark Structured Streaming (`streaming/`) | 2–3 | done (Bronze + online features) |
+| Shared feature definitions (`features/`) | 3 | done (online + offline, consistency-tested) |
+| Medallion layers (Bronze / Silver / Gold) | 2–3 | done |
 | Chargeback label simulation | 4 | not started |
 | Point-in-time training set builder (`training/`) | 4 | not started |
 | XGBoost model + MLflow registry | 5 | not started |

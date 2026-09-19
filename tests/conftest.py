@@ -40,3 +40,41 @@ def spark():
     session.sparkContext.setLogLevel("ERROR")
     yield session
     session.stop()
+
+
+@pytest.fixture
+def make_event():
+    """Factory for payment events in tests.
+
+    Defaults to a single card at a fixed time so a test only has to state the
+    thing it actually cares about.
+    """
+    from datetime import UTC, datetime
+
+    from common.events import PaymentEvent
+
+    base_time = datetime(2023, 6, 1, 12, 0, 0, tzinfo=UTC)
+    counter = {"n": 0}
+
+    def _make(
+        at: datetime | None = None,
+        amount: float = 100.0,
+        card_key: str = "13926|315|gmail.com",
+        device_info: str | None = None,
+        r_emaildomain: str | None = None,
+        **overrides,
+    ) -> PaymentEvent:
+        counter["n"] += 1
+        moment = at or base_time
+        return PaymentEvent(
+            transaction_id=3_000_000 + counter["n"],
+            event_time=moment,
+            transaction_dt=int(moment.timestamp()),
+            card_key=card_key,
+            amount=amount,
+            device_info=device_info,
+            r_emaildomain=r_emaildomain,
+            **overrides,
+        )
+
+    return _make

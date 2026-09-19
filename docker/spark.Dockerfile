@@ -24,7 +24,7 @@ RUN mkdir -p features serving producer streaming training genai eval common \
     && touch features/__init__.py serving/__init__.py producer/__init__.py \
        streaming/__init__.py training/__init__.py genai/__init__.py eval/__init__.py \
        common/__init__.py \
-    && pip install --no-cache-dir ".[spark]"
+    && pip install --no-cache-dir ".[spark,quality]"
 
 # Resolve the Delta and Kafka connector jars at build time so that starting a
 # job does not depend on Maven Central being reachable (and does not spend the

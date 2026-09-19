@@ -14,33 +14,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from common.events import PaymentEvent, payment_event_from_row
+from common.events import PaymentEvent
 from common.timeline import DEFAULT_EPOCH
+from tests.spark_helpers import KAFKA_SCHEMA, kafka_shaped_dataframe
 
 pytestmark = pytest.mark.needs_spark
-
-
-def _kafka_shaped_dataframe(spark, transactions: pd.DataFrame, n: int = 25):
-    """Build a batch DataFrame with the same columns the Kafka source produces."""
-    from datetime import datetime
-
-    rows = []
-    for offset, record in enumerate(transactions.head(n).to_dict(orient="records")):
-        event = payment_event_from_row(record, epoch=DEFAULT_EPOCH)
-        rows.append(
-            {
-                "key": event.card_key.encode(),
-                "value": event.model_dump_json().encode(),
-                "topic": "payments",
-                "partition": 0,
-                "offset": offset,
-                "timestamp": datetime(2023, 6, 1, 12, 0, 0),
-            }
-        )
-    return spark.createDataFrame(
-        rows,
-        "key binary, value binary, topic string, partition int, offset long, timestamp timestamp",
-    )
 
 
 def test_spark_schema_matches_the_event_model() -> None:
@@ -61,7 +39,7 @@ def test_spark_schema_matches_the_event_model() -> None:
 def test_parse_produces_one_row_per_message(spark, sample_transactions: pd.DataFrame) -> None:
     from streaming.bronze import parse_payment_events
 
-    raw = _kafka_shaped_dataframe(spark, sample_transactions, n=25)
+    raw = kafka_shaped_dataframe(spark, sample_transactions, n=25)
 
     parsed = parse_payment_events(raw)
 
@@ -73,7 +51,7 @@ def test_parsed_columns_carry_the_payment_and_its_provenance(
 ) -> None:
     from streaming.bronze import parse_payment_events
 
-    raw = _kafka_shaped_dataframe(spark, sample_transactions, n=5)
+    raw = kafka_shaped_dataframe(spark, sample_transactions, n=5)
     row = parse_payment_events(raw).orderBy("kafka_offset").first()
     expected = sample_transactions.iloc[0]
 
@@ -93,7 +71,7 @@ def test_event_time_is_parsed_as_a_timestamp(spark, sample_transactions: pd.Data
     """The JSON carries an ISO-8601 string; Bronze needs a real timestamp."""
     from streaming.bronze import parse_payment_events
 
-    raw = _kafka_shaped_dataframe(spark, sample_transactions, n=5)
+    raw = kafka_shaped_dataframe(spark, sample_transactions, n=5)
     row = parse_payment_events(raw).orderBy("kafka_offset").first()
     expected_dt = int(sample_transactions.iloc[0]["TransactionDT"])
 
@@ -107,7 +85,7 @@ def test_event_time_is_parsed_as_a_timestamp(spark, sample_transactions: pd.Data
 def test_sparse_blocks_survive_as_maps(spark, sample_transactions: pd.DataFrame) -> None:
     from streaming.bronze import parse_payment_events
 
-    raw = _kafka_shaped_dataframe(spark, sample_transactions, n=5)
+    raw = kafka_shaped_dataframe(spark, sample_transactions, n=5)
     row = parse_payment_events(raw).orderBy("kafka_offset").first()
 
     assert row["counts"]["C1"] is not None
@@ -132,7 +110,7 @@ def test_unparseable_messages_are_dropped_not_stored_as_nulls(spark) -> None:
                 "timestamp": datetime(2023, 6, 1),
             }
         ],
-        "key binary, value binary, topic string, partition int, offset long, timestamp timestamp",
+        KAFKA_SCHEMA,
     )
 
     assert parse_payment_events(raw).count() == 0
@@ -153,7 +131,7 @@ def test_streaming_write_lands_in_a_partitioned_delta_table(
     bronze_path = str(tmp_path / "bronze")
     checkpoint_path = str(tmp_path / "checkpoint")
 
-    kafka_shaped = _kafka_shaped_dataframe(spark, sample_transactions, n=40)
+    kafka_shaped = kafka_shaped_dataframe(spark, sample_transactions, n=40)
     kafka_shaped.write.parquet(str(source_dir))
 
     stream = spark.readStream.schema(kafka_shaped.schema).parquet(str(source_dir))
@@ -184,7 +162,7 @@ def test_restarting_the_stream_does_not_duplicate_rows(
     bronze_path = str(tmp_path / "bronze")
     checkpoint_path = str(tmp_path / "checkpoint")
 
-    kafka_shaped = _kafka_shaped_dataframe(spark, sample_transactions, n=20)
+    kafka_shaped = kafka_shaped_dataframe(spark, sample_transactions, n=20)
     kafka_shaped.write.parquet(source_dir)
 
     for _ in range(2):

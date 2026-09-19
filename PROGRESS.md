@@ -7,7 +7,7 @@ phase.
 |---|---|
 | 1. Foundation | ✅ done |
 | 2. Streaming ingestion | ✅ done |
-| 3. Features | ⬜ not started |
+| 3. Features | ✅ done |
 | 4. Labels and training data | ⬜ not started |
 | 5. Model | ⬜ not started |
 | 6. Serving | ⬜ not started |
@@ -15,6 +15,83 @@ phase.
 | 8. GenAI assistant | ⬜ not started |
 | 9. Analyst app and dashboard | ⬜ not started |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 3 — Features ✅
+
+### What is in place
+
+- **`features/definitions.py`** — every behavioural feature, defined once. 18 features across four
+  groups: stateless (amount, hour, night), velocity (10m/1h/24h counts, time since last payment),
+  spending pattern (lifetime average, ratio to it) and novelty (new card, new device, new email
+  domain). Pure functions over a `CardState`, so a feature can only ever see the past.
+- **`features/store.py`** — the Redis online store. Keyed by **card token**, not card: a Redis dump
+  contains no card identifiers. Stores state rather than features (see below), with a TTL.
+- **`common/pii.py` + `common/pii_spark.py`** — HMAC-SHA256 tokenisation with a secret salt, one
+  implementation used by both the API and the vectorised Spark path.
+- **`streaming/features.py`** — the job the `spark` container now runs: one read of Kafka, Bronze
+  written and each card's Redis state updated from the same micro-batch, repartitioned by card and
+  sorted so the fold happens in order.
+- **`streaming/silver.py`** — Bronze → Silver: deduplicate, drop non-positive amounts, tokenise,
+  and drop the four columns the token was built from. Refuses to write if quality checks fail.
+- **`features/offline.py` + `streaming/gold.py`** — the batch implementation of the same features
+  as Spark window functions, and the Gold table built from it.
+- **`quality/expectations.py`** — a 12-expectation Great Expectations suite. The strongest of them
+  is the exact column set, which fails if a raw card identifier ever reappears in Silver.
+
+### How to run it
+
+```bash
+make up                            # kafka, spark (bronze + redis), redis, mlflow, api
+make produce ARGS="--limit 5000"   # replay payments
+make bronze-peek                   # what landed
+make features                      # Silver + Gold (runs the quality suite on the way)
+make quality                       # quality suite on its own -> reports/quality_silver.json
+```
+
+### Verified
+
+Run on 2026-09-19 in the development container (Spark 3.5.3 on Java 17, Delta 3.2.1, GE 0.18.22):
+
+- `make lint` — clean.
+- Fast suite — **88 passed** in 1.7 s.
+- Spark suite — **44 passed** in 54 s.
+- **The consistency test**: all 18 features agree between the online fold and the Spark window
+  implementation, to within 1e-6, across a 400-payment sample — checked one feature at a time so a
+  failure would name the culprit.
+- Manual end-to-end over the 1000-row fixture: Bronze → Silver (1000 rows, 24 columns, **no
+  `card1` / `addr1` / `card_key`**) → quality **12/12 expectations passed** → Gold (1000 rows,
+  36 columns). Online path folded the same events into 44 card states in Redis, and the busiest
+  card came back with 83 lifetime payments and an average amount of 32.12.
+
+### Fixed along the way
+
+- **`PYSPARK_PYTHON`**: Spark was launching Python workers with the system interpreter, so the
+  first pandas UDF failed with "No module named pandas". The session builder now points Spark at
+  `sys.executable`. This would have hit you too.
+- **Java 21 vs Arrow**: pandas UDFs fail on Java 21 with an error a long way from its cause
+  (`sun.misc.Unsafe ... not available`). Confirmed by running the same tests on both JVMs; the
+  session builder now warns when it finds a JVM newer than 17.
+- **Feature windows** now exclude events *after* the payment being scored, not just before the
+  cutoff — protection against a late-arriving payment seeing its own future.
+
+### Not verified yet (needs your laptop)
+
+- Redis itself: every test runs against `fakeredis`. The client code is the real `redis` package,
+  but nothing here has talked to a Redis server.
+- The `spark` container running the combined Bronze + Redis job against a live broker.
+
+### Known issues / deliberate gaps
+
+- **Known divergence**: Redis keeps the 20 most recent distinct devices per card; the offline
+  window keeps all of them. A test asserts no card in the data comes near that bound, so the
+  divergence cannot creep in unnoticed.
+- Dropping `card1`/`addr1` costs model performance — a deliberate trade, documented in
+  `docs/design_decisions.md`.
+- Silver and Gold are full rebuilds, not incremental. Correct and simple; slow once the dataset is
+  large.
+- No labels yet, so nothing is trained on these features. That is phase 4.
 
 ---
 
