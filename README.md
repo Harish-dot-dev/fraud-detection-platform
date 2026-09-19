@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 1 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 2 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
@@ -96,6 +96,17 @@ make up         # start kafka, redis, mlflow and the scoring API
 
 Then open the API at <http://localhost:8000/docs> and MLflow at <http://localhost:5000>.
 `make down` stops everything.
+
+### Send some payments through it
+
+```bash
+make produce ARGS="--limit 2000"   # replay transactions onto the Kafka topic
+make stream-logs                   # watch Spark land them in Bronze Delta
+make bronze-peek                   # row counts, card counts, time range
+```
+
+`make produce-preview` prints a couple of payment events without needing Docker at all — the
+quickest way to see what flows through the system.
 
 ### Generate a PII salt
 

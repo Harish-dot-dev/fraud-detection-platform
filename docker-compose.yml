@@ -57,6 +57,65 @@ services:
     mem_limit: 1536m
     restart: unless-stopped
 
+  # One-shot topic creation. Auto-creation is enabled as a safety net, but
+  # creating the topics explicitly means the partition count is a decision
+  # rather than an accident.
+  kafka-setup:
+    image: apache/kafka:3.8.1
+    container_name: fraud-kafka-setup
+    profiles: ["core"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    # A single-element list: the whole script is one argument to `bash -c`.
+    command:
+      - |
+        set -e
+        echo "Creating topics..."
+        # 3 partitions: messages are keyed by the card identity proxy, so a
+        # card's payments stay in one partition and therefore stay in order.
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists --topic ${KAFKA_TOPIC_PAYMENTS:-payments} \
+          --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists --topic ${KAFKA_TOPIC_DECISIONS:-decisions} \
+          --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+    restart: "no"
+    mem_limit: 512m
+
+  # --- Stream processing ----------------------------------------------------
+  # Runs the Bronze ingest continuously: Kafka -> parsed events -> Delta.
+  # Starting it with the stack means `docker compose up` really does bring up
+  # the whole pipeline; it simply waits until the producer sends something.
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark.Dockerfile
+    image: fraud-platform/spark:0.1.0
+    container_name: fraud-spark
+    profiles: ["core"]
+    command: ["python", "-m", "streaming.bronze"]
+    ports:
+      # Spark UI for the running job - useful for showing micro-batch timings.
+      - "4040:4040"
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    volumes:
+      - ./:/app
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_completed_successfully
+    # Spark's JVM plus a local executor. The single biggest consumer in the
+    # core profile, and the first thing to cut on a smaller machine.
+    mem_limit: 3072m
+    restart: unless-stopped
+
   # --- Online feature store -------------------------------------------------
   # Redis holds the per-card rolling features that /score reads on every request.
   # It is a cache, not a system of record: the Delta gold tables are the truth,
@@ -176,7 +235,6 @@ services:
     restart: unless-stopped
 
   # --- Services added in later phases ---------------------------------------
-  # spark            (phase 2) streaming job container
   # airflow + db     (phase 7) profile: orchestration
   # analyst-app      (phase 9) profile: ai
   # superset         (phase 9) profile: dashboard

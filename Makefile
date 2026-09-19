@@ -13,6 +13,7 @@ PIP := $(VENV)/bin/pip
 COMPOSE := docker compose
 
 .PHONY: help env install lint fmt test test-all sample data up up-ai down ps logs \
+	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -89,6 +90,29 @@ logs: ## Tail logs from all running containers
 ollama-pull: ## Download the local LLM into the ollama volume (run once)
 	$(COMPOSE) exec ollama ollama pull $${OLLAMA_MODEL:-llama3.2:3b}
 
+##@ Pipeline
+
+produce: ## Replay payments onto Kafka. e.g. make produce ARGS="--limit 500 --speedup 0"
+	$(PY) -m producer.replay $(ARGS)
+
+produce-preview: ## Print a few payment events without touching Kafka
+	$(PY) -m producer.replay --dry-run --limit 3
+
+topics: ## List the Kafka topics
+	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+stream-logs: ## Follow the Bronze streaming job running in Docker
+	$(COMPOSE) logs -f spark
+
+stream-once: ## Drain the topic into Bronze Delta and exit (runs in the spark container)
+	$(COMPOSE) run --rm spark python -m streaming.bronze --once
+
+stream-local: ## Run the Bronze job from this venv (needs `pip install -e '.[spark]'` + Java 17)
+	$(PY) -m streaming.bronze --bootstrap-servers localhost:29092 $(ARGS)
+
+bronze-peek: ## Show the last few rows landed in the Bronze Delta table
+	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
+
 ##@ Housekeeping
 
 clean: ## Remove caches, build artifacts and the virtualenv
@@ -101,7 +125,6 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 
 # ---------------------------------------------------------------------------
 # Targets below arrive with their phase:
-#   produce / stream   (phase 2)   replay transactions, run the streaming job
 #   features           (phase 3)   build silver + gold feature tables
 #   labels             (phase 4)   simulate chargeback arrival
 #   train              (phase 5)   train + register the model

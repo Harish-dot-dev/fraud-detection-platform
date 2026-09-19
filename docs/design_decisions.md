@@ -92,11 +92,63 @@ screenshot. See [dashboard/powerbi/README.md](../dashboard/powerbi/README.md).
 
 ---
 
+## Phase 2 — Streaming ingestion
+
+### The payment event carries no label
+
+A real payment message cannot contain `isFraud`: at authorisation time nobody knows. Confirmation
+arrives weeks later as a chargeback. So `PaymentEvent` has no label field at all, and the streaming
+and scoring paths **cannot** leak it — not as a matter of discipline, but because the column is not
+in the message. `tests/test_events.py::test_the_event_carries_no_label` pins that down.
+
+Labels enter the platform separately, through the simulated chargeback table in phase 4.
+
+### Kafka messages are keyed by the card identity proxy
+
+Kafka guarantees ordering *within a partition*, not across a topic. Velocity features ("how many
+payments has this card made in the last 10 minutes") are wrong if two payments on the same card are
+processed out of order, so the card key is the partition key. Three partitions give some
+parallelism while keeping each card's history sequential.
+
+### Sparse column blocks travel as maps, not as 339 columns
+
+The V block is about 90% empty. Sending 339 nulls per message wastes bandwidth, and a 339-column
+Spark schema is unreadable. The populated values travel as `map<string,double>` instead. The same
+applies to C, D, M and the identity columns, which are split into a numeric map and a categorical
+map so that the id_01 scores do not have to be stringified and cast back.
+
+### The Bronze schema is declared, not inferred
+
+Schema inference on a stream looks at the first micro-batch only. If a later batch happens to have
+a field the first one lacked, the table's schema and the data quietly diverge. The Bronze job
+therefore declares the schema explicitly — and a test compares it field by field against the
+Pydantic model, so a field added to the producer cannot silently go missing downstream.
+
+### Bronze keeps the raw payload
+
+Alongside the typed columns, every Bronze row keeps the original JSON string and its Kafka topic,
+partition and offset. Bronze is the replay point: if a parsing assumption turns out to be wrong,
+the raw payload is still there. Dropping it would make the mistake unrecoverable.
+
+### Replay pacing is scheduled, not chained
+
+The producer computes each event's send time against the *start* of the run, rather than sleeping
+for the full gap after each send. Chaining sleeps makes a slow broker stretch the entire replay,
+and the drift compounds. There is a test that proves the difference.
+
+### Spark 3.5 needs Java 17
+
+Spark 3.5 supports Java 8, 11 and 17 — Java 21 support landed in Spark 4. The Docker image pins the
+JRE explicitly and CI installs Temurin 17 for the Spark job, rather than inheriting whatever the
+base image or runner ships.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.
 
-### Synthetic timeline for `TransactionDT` (phase 2)
+### Synthetic timeline for `TransactionDT` (implemented in phase 2)
 
 `TransactionDT` is a seconds offset from an unknown origin, not a timestamp. It is mapped onto a
 fixed reference date (`SYNTHETIC_EPOCH`, default 2023-01-01) so the data has a real calendar, which
