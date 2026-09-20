@@ -390,6 +390,94 @@ real performance — but the pipeline now has to do real work to produce them.
 
 ---
 
+## Phase 6 — Serving
+
+### Rules run before the model, and a block short-circuits it
+
+Some decisions are not the model's to make: a card the fraud team has confirmed as compromised, a
+policy limit, a brand-new attack pattern that cannot wait a week for a retrain. Those are rules,
+they live in YAML, and an analyst can add one without a deployment.
+
+A blocking rule skips the model entirely — it saves several milliseconds, and the model's opinion
+was irrelevant anyway. A `review` rule is a **floor, not a veto**: it can lift an allow to a review,
+but it cannot stop the model blocking outright.
+
+The condition language has no `eval` in it. A rules file is configuration, and configuration that
+can execute arbitrary Python is a remote code execution bug waiting for someone to edit the wrong
+file. Unknown operators fail at load time rather than silently never matching.
+
+### The API never writes to the feature store
+
+The streaming job owns card state. If the API updated it too, a retried request would count the
+same payment twice in its own card's history — and retries are normal. Scoring is read-only, so a
+re-delivery produces the same decision twice rather than corrupting anything.
+
+### Redis being down degrades the score, not the service
+
+A fraud platform that refuses to answer is worse than one that answers conservatively. If the
+feature store is unreachable the card is treated as unknown, which biases towards review — the safe
+direction — and the degradation is explicit in the response and the audit record.
+
+The same applies to the model: if the registry is unreachable or there is no champion yet, the
+service starts in degraded mode with rules only, and says so in `/health`.
+
+### Thresholds travel with the model version
+
+They were tuned on that model's own validation window, so pairing version 7's model with version
+4's thresholds is an operating point nobody ever evaluated. The loader reads both from the registry
+together.
+
+### SHAP runs only on flagged payments
+
+Explanations cost about 7 ms. Nobody reads the reasons for an allowed payment, and ~97% of payments
+are allowed, so explaining them would spend a fifth of the latency budget on output nobody looks
+at. Reasons are computed for review and block decisions only — the same principle that keeps the
+LLM off the common path in phase 8.
+
+### Decisions go to Kafka, not to Delta inline
+
+A synchronous table write on the scoring path puts file-system latency between a customer and their
+payment. The topic is durable; phase 7's consumer lands it in Delta. When no broker is reachable
+the sink falls back to a local JSONL file, so a laptop demo still leaves a complete audit trail
+rather than silently discarding decisions.
+
+### The latency work: 526 ms → 11 ms, by measuring
+
+The first load test returned a p50 of **526 ms** against a 100 ms target. Profiling the scoring
+path rather than guessing found two causes:
+
+| Stage | Before | After |
+|---|---|---|
+| `build_matrix` on one row | 21.5 ms | 1.0 ms (`build_row`) |
+| Model threads | 4 per request | 1 |
+| Full `score()`, single thread | 36 ms | ~12 ms |
+
+1. **`build_matrix` is written for a training set** — vectorised pandas over hundreds of thousands
+   of rows. On a single row it spends 21.5 ms constructing 57 Series and six categorical dtypes to
+   hold one value each. `build_row` builds the same one-row matrix directly, and a test asserts the
+   two produce identical output — the same "two implementations, one contract" pattern as the
+   online/offline features.
+2. **XGBoost defaults to one thread per core, per request.** Eight in-flight requests on four cores
+   produced 32 threads competing for them. A single-row prediction gains nothing from parallelism,
+   so the served model is pinned to one thread.
+
+Measured afterwards, on the in-process demo server (fakeredis, no broker, four cores):
+
+| Concurrency | p50 | p95 | p99 | req/s |
+|---|---|---|---|---|
+| 1 | 11.4 ms | 14.0 ms | 19.5 ms | 84 |
+| 2 | 23.4 ms | 32.3 ms | 41.2 ms | 81 |
+| 4 | 49.6 ms | 75.2 ms | 92.3 ms | 78 |
+| 8 | 105.5 ms | 150.2 ms | 237.6 ms | 75 |
+
+Throughput is flat at ~80 req/s across all of them, which says the service is CPU-bound in a single
+Python process: past that point the latency being measured is the **queue**, not the service. The
+production fix is more uvicorn workers, not more optimisation. This is why the load test sweeps
+concurrency by default and names the unqueued run explicitly — quoting a saturated p50 as "our
+latency" is the most common way a load test result misleads.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.
@@ -408,7 +496,7 @@ used proxy for this dataset. It is imperfect in both directions — one card wit
 addresses looks like two cards, and two cards sharing a household address and email domain can
 collapse into one. It is documented as an approximation rather than presented as ground truth.
 
-### Feature freshness at scoring time (implemented in phase 3; used by the API in phase 6)
+### Feature freshness at scoring time (implemented in phases 3 and 6)
 
 Spark writes rolling per-card aggregates to Redis in micro-batches, so there is always a few
 seconds of lag. If `/score` read Redis alone, the feature "transactions on this card in the last

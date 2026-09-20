@@ -1,0 +1,88 @@
+# Rules engine configuration.
+#
+# Rules run BEFORE the model, and they exist because some decisions are not the
+# model's to make:
+#
+#   * a card the fraud team has confirmed as compromised must be blocked, even
+#     if the model thinks the payment looks ordinary;
+#   * a regulatory or commercial limit ("nothing over 10,000 without review")
+#     is a policy, not a prediction;
+#   * a brand new pattern can be stopped today, by an analyst editing this
+#     file, without waiting a week for a retrain.
+#
+# Each rule states its action. `block` short-circuits - the model is not even
+# run, which also saves the latency. `review` sets a floor: the payment goes to
+# an analyst unless the model wants to block it outright.
+#
+# Every decision records which rule fired, so the audit log always says whether
+# a human rule or the model made the call.
+
+version: 1
+
+# Card tokens the fraud team has confirmed as compromised. These are tokens
+# (see common/pii.py), not card numbers - the blocklist itself holds no PII.
+# In production this would be a table that analysts maintain; here it is a list
+# so the mechanism is visible.
+blocklist:
+  card_tokens: []
+
+rules:
+  - name: card_on_blocklist
+    description: The fraud team has confirmed this card is compromised.
+    action: block
+    when:
+      all:
+        - field: card_token
+          op: in_blocklist
+
+  - name: amount_over_hard_limit
+    description: >
+      Above this amount a human always looks, whatever the model says. This is
+      a policy limit, not a prediction - the cost of being wrong is too high to
+      leave to a probability.
+    action: review
+    when:
+      all:
+        - field: amount
+          op: ">="
+          value: 5000
+
+  - name: extreme_velocity
+    description: >
+      Ten or more payments on one card inside ten minutes. Card-testing attacks
+      look exactly like this, and the pattern is unambiguous enough that it
+      does not need a model to confirm it.
+    action: review
+    when:
+      all:
+        - field: card_txn_count_10m
+          op: ">="
+          value: 10
+
+  - name: new_card_large_amount
+    description: >
+      A card's very first payment, for far more than a typical transaction.
+      Individually weak signals; together they are worth an analyst's time.
+    action: review
+    when:
+      all:
+        - field: card_is_new
+          op: "=="
+          value: 1
+        - field: amount
+          op: ">="
+          value: 1000
+
+  - name: anonymous_recipient_high_value
+    description: >
+      An anonymised recipient domain on a large payment. Legitimate on its own,
+      but a common component of account-takeover cash-out.
+    action: review
+    when:
+      all:
+        - field: r_emaildomain
+          op: "=="
+          value: anonymous.com
+        - field: amount
+          op: ">="
+          value: 750

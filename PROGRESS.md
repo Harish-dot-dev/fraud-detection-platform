@@ -10,11 +10,95 @@ phase.
 | 3. Features | ✅ done |
 | 4. Labels and training data | ✅ done |
 | 5. Model | ✅ done |
-| 6. Serving | ⬜ not started |
+| 6. Serving | ✅ done |
 | 7. Orchestration and analytics | ⬜ not started |
 | 8. GenAI assistant | ⬜ not started |
 | 9. Analyst app and dashboard | ⬜ not started |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 6 — Serving ✅
+
+### What is in place
+
+- **`rules/rules.yaml` + `serving/rules.py`** — a config-driven rules engine with five shipped
+  rules (blocklist, hard amount limit, extreme velocity, new card + large amount, anonymised
+  recipient). No `eval`; unknown operators fail at load time.
+- **`serving/scoring.py`** — the scoring path: Redis state → shared feature definitions → rules →
+  model → SHAP (flagged payments only) → audit record.
+- **`serving/model.py`** — loads whatever carries the `champion` alias in the MLflow registry,
+  with its thresholds, and degrades to rules-only if the registry is unreachable.
+- **`serving/app.py`** — `POST /score` and a `/health` that reports which model version is serving.
+  The request body is the same `PaymentEvent` that travels on Kafka, so there is one schema.
+- **`serving/decisions.py`** — the audit record (transaction, model version, features used,
+  rule/threshold that triggered, SHAP reasons, latency) and its sinks: Kafka, JSONL, in-memory.
+- **`serving/consumer.py`** (`make consume`) — reads the payments topic and scores through the API,
+  committing offsets only after a payment has been scored.
+- **`scripts/load_test.py`** (`make load-test`) — sweeps concurrency levels and writes
+  `reports/latency.json`.
+- **`tests/demo_server.py`** (`make demo-api`) — runs the whole API with no Docker at all.
+
+### How to run it
+
+```bash
+make up && make produce ARGS="--limit 5000"
+make consume                       # score the topic through the API
+make load-test                     # -> reports/latency.json
+
+make demo-api                      # or run the API with no Docker at all
+```
+
+### Verified
+
+Run on 2026-09-20 in the development container (4 cores):
+
+- Fast suite — **203 passed** in 21 s.
+- Spark suite — **54 passed**.
+- `make lint` — clean.
+- End-to-end through HTTP: 2,000 payments scored against a live uvicorn server (allow 1,932 /
+  review 56 / block 12), every one with an audit record.
+
+**Latency, measured** — in-process demo server, fakeredis, no broker, four cores.
+*This is not the docker-compose number:* there is no network hop to Redis and no broker behind the
+audit sink.
+
+| Concurrency | p50 | p95 | p99 | req/s |
+|---|---|---|---|---|
+| 1 | 11.4 ms | 14.0 ms | 19.5 ms | 84 |
+| 2 | 23.4 ms | 32.3 ms | 41.2 ms | 81 |
+| 4 | 49.6 ms | 75.2 ms | 92.3 ms | 78 |
+| 8 | 105.5 ms | 150.2 ms | 237.6 ms | 75 |
+
+### Fixed along the way
+
+The first load test returned **p50 526 ms** against a 100 ms target. Profiling the path rather than
+guessing found two causes, both now fixed:
+
+- **`build_matrix` cost 21.5 ms on a single row** — it is written for training sets, and on one row
+  it constructs 57 Series to hold one value each. `build_row` does the same job in 1.0 ms, with a
+  test asserting the two produce identical output.
+- **XGBoost used four threads per request** — eight concurrent requests on four cores meant 32
+  threads competing. The served model is now pinned to one thread.
+
+Result: p50 526 ms → 11.4 ms unqueued, throughput 15 → 84 req/s.
+
+Throughput is flat at ~80 req/s across every concurrency level, which says the service is CPU-bound
+in a single Python process — past that, the number being measured is the queue, not the service.
+The production fix is more uvicorn workers.
+
+### Not verified yet (needs your laptop)
+
+- The API against **real Redis, real Kafka and a real MLflow registry**. Every test here uses
+  fakeredis, an in-memory sink and a model trained in-process.
+- `make consume` against a live broker.
+- The docker-compose latency number, which is the one the README will quote.
+
+### Known issues / deliberate gaps
+
+- Decisions are published to Kafka but nothing lands them in Delta yet — that consumer is phase 7.
+- The audit record stores feature values but not the raw payment; Bronze already has that.
+- Single uvicorn worker. Fine for a laptop demo, and the reason throughput plateaus.
 
 ---
 

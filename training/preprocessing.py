@@ -23,6 +23,10 @@ re-encoding on the next retrain.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
+import numpy as np
 import pandas as pd
 
 from common.events import COUNT_COLUMNS, DELTA_COLUMNS
@@ -88,6 +92,18 @@ MODEL_COLUMNS: list[str] = (
 def _categories_for(column: str) -> list[str]:
     """Vocabulary plus the two catch-alls, in a stable order."""
     return [*CATEGORICAL_VOCABULARIES[column], OTHER, MISSING]
+
+
+# Built once. Constructing these per request cost around 20 ms on the scoring
+# path, which is a fifth of the entire latency budget spent on bookkeeping.
+CATEGORICAL_DTYPES: dict[str, pd.CategoricalDtype] = {
+    column: pd.CategoricalDtype(categories=_categories_for(column))
+    for column in CATEGORICAL_VOCABULARIES
+}
+_CANONICAL_VALUES: dict[str, dict[str, str]] = {
+    column: {value.lower(): value for value in vocabulary}
+    for column, vocabulary in CATEGORICAL_VOCABULARIES.items()
+}
 
 
 def flatten_map_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -157,3 +173,52 @@ def build_matrix(frame: pd.DataFrame) -> pd.DataFrame:
                 matrix[column] = pd.Series(float("nan"), index=flattened.index, dtype="float64")
 
     return matrix[MODEL_COLUMNS]
+
+
+def _canonical_category(column: str, value: Any) -> str:
+    """Encode one categorical value exactly as :func:`build_matrix` would."""
+    if value is None or (isinstance(value, float) and np.isnan(value)) or value != value:
+        return MISSING
+    return _CANONICAL_VALUES[column].get(str(value).lower(), OTHER)
+
+
+def _as_float(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return number
+
+
+def build_row(row: Mapping[str, Any]) -> pd.DataFrame:
+    """The single-payment fast path, for the scoring API.
+
+    ``build_matrix`` is written for a training set: vectorised pandas
+    operations over hundreds of thousands of rows. Running it on one row costs
+    around 20 ms of pure overhead - constructing 57 Series and six categorical
+    dtypes to hold a single value each - which on a 100 ms budget is not
+    affordable.
+
+    This builds the same one-row matrix directly. It is a second
+    implementation of the same schema, so - exactly like the online/offline
+    feature pair - a test asserts the two produce identical output
+    (``test_the_fast_path_matches_the_batch_path``).
+    """
+    flat = dict(row)
+    for map_column, expected in MAP_COLUMNS.items():
+        mapping = flat.pop(map_column, None) or {}
+        for column in expected:
+            if column not in flat:
+                flat[column] = mapping.get(column, float("nan"))
+
+    data: dict[str, Any] = {}
+    for column in MODEL_COLUMNS:
+        if column in CATEGORICAL_VOCABULARIES:
+            data[column] = pd.Categorical(
+                [_canonical_category(column, flat.get(column))],
+                dtype=CATEGORICAL_DTYPES[column],
+            )
+        else:
+            data[column] = np.array([_as_float(flat.get(column))], dtype="float64")
+
+    return pd.DataFrame(data, columns=MODEL_COLUMNS)

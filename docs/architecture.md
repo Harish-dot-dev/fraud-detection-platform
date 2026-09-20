@@ -14,8 +14,8 @@ component by component and is filled in as each phase lands.
 | Chargeback label simulation | 4 | done |
 | Point-in-time training set builder (`training/`) | 4 | done (leakage-tested) |
 | XGBoost model + MLflow registry | 5 | done (time split, cost-tuned thresholds, SHAP) |
-| Rules engine (`rules/`) | 6 | not started |
-| Scoring API (`serving/`) | 6 | skeleton: `GET /health` |
+| Rules engine (`rules/`) | 6 | done |
+| Scoring API (`serving/`) | 6 | done (`/score`: rules + model + SHAP + audit log) |
 | Airflow DAGs (`airflow/dags/`) | 7 | not started |
 | dbt models (`dbt/`) | 7 | not started |
 | GenAI assistant (`genai/`) | 8 | not started |

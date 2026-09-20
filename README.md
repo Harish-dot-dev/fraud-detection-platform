@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 5 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 6 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
@@ -115,6 +115,17 @@ make dataset                       # point-in-time training set
 make train                         # -> reports/metrics.json, reports/thresholds.json
 ```
 
+Then score payments through the API:
+
+```bash
+make consume                       # payments topic -> POST /score
+make load-test                     # -> reports/latency.json
+curl -s localhost:8000/health | jq
+```
+
+`make demo-api` runs the whole scoring API with no Docker at all — fakeredis and a model trained
+in-process — which is the quickest way to see a decision without setting anything up.
+
 `make produce-preview` prints a couple of payment events without needing Docker at all — the
 quickest way to see what flows through the system.
 
@@ -173,12 +184,17 @@ real dataset.
 | Fraud value caught vs missed | *not yet measured* | `make train` → `reports/metrics.json` |
 | False positive rate | *not yet measured* | `make train` → `reports/metrics.json` |
 | Chosen thresholds + cost rationale | *not yet measured* | `make train` → `reports/thresholds.json` |
-| `/score` p50 / p95 / p99 latency | *not yet measured* | `reports/latency.json` (phase 6) |
+| `/score` p50 / p95 / p99 latency | *not yet measured on the full stack* | `make load-test` → `reports/latency.json` |
 | LLM factual accuracy / schema validity | *not yet measured* | `reports/llm_eval.json` (phase 8) |
 | Retrieval quality (label match) | *not yet measured* | `reports/llm_eval.json` (phase 8) |
 
 The "under 100 ms" scoring target is a **goal**, not a claim. The measured number will be published
-here once `make load-test` has been run, whatever it turns out to be.
+here once `make load-test` has been run against the full stack, whatever it turns out to be.
+
+For what it is worth today: on the Docker-free demo server (fakeredis, no broker, four cores) the
+scoring path measures **p50 11.4 ms, p95 14.0 ms, p99 19.5 ms** unqueued, and the service saturates
+at ~80 req/s in a single process. That is not the docker-compose number and is not quoted as one —
+it is recorded in `PROGRESS.md` with its conditions.
 
 ---
 
