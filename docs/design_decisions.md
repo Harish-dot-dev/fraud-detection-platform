@@ -585,6 +585,84 @@ so there is now a test asserting the count and the share describe the same thing
 
 ---
 
+## Phase 8 — The GenAI assistant
+
+### The LLM never computes a number
+
+This is the load-bearing decision in the whole phase. Every figure an analyst reads — the amount,
+the velocity count, the score, the multiple of the card's average — is calculated by the pipeline,
+placed in a facts object, and handed to the model to write prose around.
+
+A 3B model asked to work out "how many times the usual amount is 847.20 when the average is 92.15"
+will produce a number. It will be wrong often enough to matter, and wrong in a way that looks
+authoritative on an analyst's screen at 2am.
+
+So the model's job is narrow: turn facts into readable English, and say when something is not
+supported. And because the facts are an explicit object, "did it stick to them?" is a question code
+can answer — `unsupported_numbers()` extracts every number from the generated text and checks it
+against what the pipeline computed.
+
+### Nothing is better than something wrong
+
+If a response cannot be parsed, validated against the Pydantic schema, *and* grounded in the facts,
+it gets one repair attempt and is then thrown away. The analyst app falls back to showing the facts
+and the SHAP reasons with no narrative.
+
+An analyst who sees no summary knows exactly where they stand. One who sees a confident invented
+figure does not.
+
+### Two kinds of invention are checked, not one
+
+Numbers are the obvious one. The subtler one is a **cited case that was never retrieved**: a
+plausible-looking transaction id sends an analyst hunting for a case that does not exist. Both are
+checked, and both reject the response.
+
+### Only confirmed cases go in the store
+
+A case whose chargeback has not arrived has no outcome to teach. Retrieving it would let one
+unresolved payment vouch for another — a retrieval system confidently reinforcing its own
+guesses. `load_cases.py` filters on `label_available_at`, the same rule the training set uses.
+
+A payment also never retrieves itself. An identical match is a perfect, useless neighbour, and
+during evaluation it would quietly turn retrieval quality into 100%.
+
+### Cases are described in prose, not as feature dumps
+
+The embedder was trained on sentences. "first payment seen on this card" sits near another
+new-card case in vector space in a way that `card_is_new=1.0` does not. Amounts are bucketed for
+the same reason — 512.40 and 498.10 are the same *kind* of payment and the embedder should not have
+to learn that.
+
+### The IVFFlat trap: an index that quietly returns too little
+
+pgvector's IVFFlat index is *approximate*: it sorts vectors into lists and searches one of them by
+default. Created over a small table this is actively wrong — a three-row table returned **two**
+neighbours for a request for three, because the third vector sat in a list the query never probed.
+
+The index is now created only once there are enough rows to justify it (`ensure_index`), and below
+that Postgres does an exact sequential scan, which on a few thousand short vectors is both correct
+and faster. There is a regression test. This also matches pgvector's own advice: build the index
+after loading, with roughly one list per thousand rows.
+
+### The assistant runs only on flagged payments
+
+~97% of payments are allowed. Nobody reads a summary of a payment that went through, and
+generation costs seconds where scoring costs milliseconds. The same principle keeps SHAP off the
+allowed path in phase 6.
+
+### Both model calls are interfaces with a real and a deterministic implementation
+
+`SentenceTransformerEmbedder` / `HashingEmbedder`, and `OllamaGenerator` / `ScriptedGenerator`. The
+stubs exist so the retrieval SQL, the validation, the grounding checks and the evaluation harness
+can all be tested in CI without a model download.
+
+The fallback to a stub is **opt-in**, never silent, and the eval report records which embedder and
+which generator produced it. A retrieval-quality number measured with the hashing stub is
+meaningless, and the report says so in its own `note` field rather than leaving it to be
+rediscovered later.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.

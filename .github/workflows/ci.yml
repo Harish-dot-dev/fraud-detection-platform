@@ -96,6 +96,45 @@ jobs:
       - name: Run the Spark tests
         run: pytest -m "needs_spark"
 
+  pgvector-tests:
+    name: Case store (pgvector)
+    runs-on: ubuntu-24.04
+    services:
+      pgvector:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_DB: fraud_cases
+          POSTGRES_USER: fraud
+          POSTGRES_PASSWORD: fraud_local_dev_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fraud -d fraud_cases"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        # The case store needs a Postgres driver, not the whole GenAI extra -
+        # sentence-transformers would pull torch, which is 2 GB of download for
+        # tests that use the deterministic stub embedder anyway.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ml,dev]" "psycopg[binary]==3.2.3" "pgvector==0.3.6"
+
+      - name: Run the case store tests
+        env:
+          PGVECTOR_HOST: localhost
+        run: pytest -m "needs_pgvector"
+
   compose:
     name: docker compose config
     runs-on: ubuntu-24.04

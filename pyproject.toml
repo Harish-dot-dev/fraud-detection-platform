@@ -126,4 +126,5 @@ markers = [
     "needs_spark: requires a local Spark session and Java 17",
     "needs_ollama: requires a running Ollama server with the configured model pulled",
     "needs_dbt: requires dbt-core and dbt-duckdb (the `dbt` extra)",
+    "needs_pgvector: requires a Postgres server with the pgvector extension",
 ]

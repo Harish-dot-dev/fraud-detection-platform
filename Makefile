@@ -16,6 +16,7 @@ COMPOSE := docker compose
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      silver gold quality features labels dataset train consume load-test demo-api \
 	      export dbt drift decisions-sink warehouse airflow airflow-logs \
+	      load-cases llm-eval \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -164,6 +165,12 @@ airflow: ## Start Airflow (orchestration profile) at http://localhost:8080
 airflow-logs: ## Follow the Airflow logs (the admin password is in here)
 	$(COMPOSE) logs -f airflow
 
+load-cases: ## Embed confirmed past cases into pgvector for retrieval
+	$(PY) -m genai.load_cases $(ARGS)
+
+llm-eval: ## Evaluate the analyst assistant -> reports/llm_eval.json
+	$(PY) -m eval.llm_eval $(ARGS)
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -179,7 +186,6 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 
 # ---------------------------------------------------------------------------
 # Targets below arrive with their phase:
-#   llm-eval           (phase 8)   -> reports/llm_eval.json
 #   app / dashboard    (phase 9)
 #   metrics            (phase 10)  regenerate every reports/*.json
 # ---------------------------------------------------------------------------

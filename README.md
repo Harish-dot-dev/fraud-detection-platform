@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 7 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 8 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
@@ -192,8 +192,8 @@ real dataset.
 | False positive rate | *not yet measured* | `make train` → `reports/metrics.json` |
 | Chosen thresholds + cost rationale | *not yet measured* | `make train` → `reports/thresholds.json` |
 | `/score` p50 / p95 / p99 latency | 12.7 / 20.3 / 21.4 ms *(native services, not containers — see PROGRESS.md)* | `make load-test` → `reports/latency.json` |
-| LLM factual accuracy / schema validity | *not yet measured* | `reports/llm_eval.json` (phase 8) |
-| Retrieval quality (label match) | *not yet measured* | `reports/llm_eval.json` (phase 8) |
+| LLM factual accuracy / schema validity | *not yet measured — needs Ollama* | `make llm-eval` → `reports/llm_eval.json` |
+| Retrieval quality (label match) | *not yet measured — needs the real embedder* | `make llm-eval` → `reports/llm_eval.json` |
 
 The "under 100 ms" scoring target is a **goal**, not a claim. The measured number will be published
 here once `make load-test` has been run against the full stack, whatever it turns out to be.

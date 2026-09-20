@@ -12,9 +12,70 @@ phase.
 | 5. Model | ✅ done |
 | 6. Serving | ✅ done |
 | 7. Orchestration and analytics | ✅ done |
-| 8. GenAI assistant | ⬜ not started |
+| 8. GenAI assistant | ✅ done (except the model calls) |
 | 9. Analyst app and dashboard | ⬜ not started |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 8 — GenAI assistant ✅ (except the two model calls)
+
+### What is in place
+
+- **`genai/case_store.py`** — Postgres + pgvector. Only confirmed cases, cosine similarity, a
+  payment never retrieves itself, and the IVFFlat index is deferred until the table is big enough
+  to need it.
+- **`genai/embeddings.py`** — `SentenceTransformerEmbedder` (real) and `HashingEmbedder`
+  (deterministic, no download). The fallback is opt-in and never silent.
+- **`genai/facts.py`** — the facts object. Everything the model is allowed to know, plus
+  `unsupported_numbers()`, which is what makes grounding checkable.
+- **`genai/prompts.py` / `genai/summarise.py`** — prompt, Pydantic schema, JSON parsing, grounding
+  check, one repair attempt, and withholding the summary entirely if it still cannot be trusted.
+- **`genai/load_cases.py`** (`make load-cases`) — embeds confirmed decisions into the store.
+- **`eval/llm_eval.py`** (`make llm-eval`) — factual accuracy, schema validity, retrieval quality
+  and latency over ≥50 flagged cases → `reports/llm_eval.json`.
+
+### How to run it
+
+```bash
+make up-ai                         # ollama + pgvector
+make ollama-pull                   # llama3.2:3b, once (~2 GB)
+make load-cases                    # embed confirmed past cases
+make llm-eval                      # -> reports/llm_eval.json
+```
+
+### Verified
+
+Run on 2026-09-20 against **real Postgres 16 with pgvector 0.6.0**:
+
+- Case store: **848 confirmed cases** loaded (31 fraud, 817 legitimate), retrieval returning
+  correctly ranked neighbours.
+- `eval/llm_eval.py` ran the full harness over **50 flagged cases** with confirmed labels —
+  retrieval from the real store, facts built from real audit records, every metric computed and
+  written to `reports/llm_eval.json`.
+- Fast suite — **241 passed**; Spark — **54**; pgvector — **7**; ruff clean.
+
+### Not verified — and why the numbers are not published
+
+Hugging Face and the Ollama registry both return **403** from this environment's egress policy, so
+neither model could be downloaded. That means:
+
+- **the embeddings are the hashing stub**, not `all-MiniLM-L6-v2`;
+- **the generator is scripted**, not `llama3.2:3b`.
+
+So `reports/llm_eval.json` currently contains a *harness* measurement, not a model measurement, and
+it says so in its own `note` field. **No LLM eval number goes in the README until you have run
+`make llm-eval` against real Ollama.** The one number worth reporting from here is that the harness
+works end to end and its metrics move: with scripted responses containing deliberate faults it
+reported 84% schema validity and caught every planted ungrounded figure.
+
+### Known issues / deliberate gaps
+
+- The repair loop is one attempt. More and a small model tends to drift rather than converge, and
+  the analyst is waiting.
+- Factual accuracy is measured on the *delivered* summary, so a case that was repaired counts as
+  accurate. `repairs_needed` is reported alongside it so the retry cost stays visible.
+- The analyst feedback loop (an analyst's own decision becoming a new case) is phase 9.
 
 ---
 
