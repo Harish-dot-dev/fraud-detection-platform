@@ -461,20 +461,44 @@ path rather than guessing found two causes:
    produced 32 threads competing for them. A single-row prediction gains nothing from parallelism,
    so the served model is pinned to one thread.
 
-Measured afterwards, on the in-process demo server (fakeredis, no broker, four cores):
+Measured afterwards against **real services** - a real Redis, the champion model loaded from a real
+MLflow registry, decisions published to a real Kafka broker, all on one four-core host:
 
 | Concurrency | p50 | p95 | p99 | req/s |
 |---|---|---|---|---|
-| 1 | 11.4 ms | 14.0 ms | 19.5 ms | 84 |
-| 2 | 23.4 ms | 32.3 ms | 41.2 ms | 81 |
-| 4 | 49.6 ms | 75.2 ms | 92.3 ms | 78 |
-| 8 | 105.5 ms | 150.2 ms | 237.6 ms | 75 |
+| 1 | 12.7 ms | 20.3 ms | 21.4 ms | 71 |
+| 2 | 27.0 ms | 42.8 ms | 49.4 ms | 68 |
+| 4 | 62.9 ms | 94.9 ms | 125.9 ms | 62 |
+| 8 | 135.3 ms | 195.9 ms | 290.9 ms | 58 |
+
+The real Redis hop costs about 1.3 ms against an in-process fake (11.4 ms → 12.7 ms at concurrency
+1), which is the honest price of a network round trip on the scoring path.
 
 Throughput is flat at ~80 req/s across all of them, which says the service is CPU-bound in a single
 Python process: past that point the latency being measured is the **queue**, not the service. The
 production fix is more uvicorn workers, not more optimisation. This is why the load test sweeps
 concurrency by default and names the unqueued run explicitly — quoting a saturated p50 as "our
 latency" is the most common way a load test result misleads.
+
+### The bug only a real registry could show: empty reasons
+
+Running the platform against a real MLflow server turned up something no unit test had:
+**`mlflow.xgboost.load_model` does not round-trip `enable_categorical`.** A model logged with it
+set to `True` comes back with `False`.
+
+Predictions are unaffected - verified by comparing scores from the in-process model against the
+same model loaded from the registry, identical to within 1e-6, because the booster already knows
+its categorical splits. But `shap.TreeExplainer` reads that flag when it is *constructed* and then
+builds its own DMatrix without it. So every flagged payment reached the analyst with an empty
+reasons list, and the only evidence was a warning in the API log that nobody reads.
+
+The fix restores the parameter before the explainer is built. Two regression tests now cover it -
+one asserting a registry-loaded model can still explain itself, one asserting its predictions are
+bit-identical - and both would have caught this. The in-process tests could not: it takes a model
+that has actually been through the registry.
+
+This is the argument for integration testing against real infrastructure in one paragraph. Six
+phases of green unit tests, a feature silently not working.
 
 ---
 

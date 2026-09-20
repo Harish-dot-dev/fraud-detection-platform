@@ -184,17 +184,18 @@ real dataset.
 | Fraud value caught vs missed | *not yet measured* | `make train` → `reports/metrics.json` |
 | False positive rate | *not yet measured* | `make train` → `reports/metrics.json` |
 | Chosen thresholds + cost rationale | *not yet measured* | `make train` → `reports/thresholds.json` |
-| `/score` p50 / p95 / p99 latency | *not yet measured on the full stack* | `make load-test` → `reports/latency.json` |
+| `/score` p50 / p95 / p99 latency | 12.7 / 20.3 / 21.4 ms *(native services, not containers — see PROGRESS.md)* | `make load-test` → `reports/latency.json` |
 | LLM factual accuracy / schema validity | *not yet measured* | `reports/llm_eval.json` (phase 8) |
 | Retrieval quality (label match) | *not yet measured* | `reports/llm_eval.json` (phase 8) |
 
 The "under 100 ms" scoring target is a **goal**, not a claim. The measured number will be published
 here once `make load-test` has been run against the full stack, whatever it turns out to be.
 
-For what it is worth today: on the Docker-free demo server (fakeredis, no broker, four cores) the
-scoring path measures **p50 11.4 ms, p95 14.0 ms, p99 19.5 ms** unqueued, and the service saturates
-at ~80 req/s in a single process. That is not the docker-compose number and is not quoted as one —
-it is recorded in `PROGRESS.md` with its conditions.
+What has been measured so far, against **real Redis, a real MLflow registry and a real Kafka
+broker** (all running natively on one four-core host, not in containers): **p50 12.7 ms, p95
+20.3 ms, p99 21.4 ms** unqueued, saturating at ~71 req/s in a single process. Full table and
+conditions in [PROGRESS.md](PROGRESS.md). The docker-compose number will differ and is not being
+guessed at here.
 
 ---
 

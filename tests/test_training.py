@@ -210,3 +210,57 @@ def test_a_worse_challenger_does_not_replace_the_champion(trained, tmp_path) -> 
     assert (
         client.get_model_version_by_alias("fraud-test", "champion").version == champion["version"]
     )
+
+
+def test_a_model_from_the_registry_can_still_explain_itself(trained, tmp_path) -> None:
+    """The regression test for a bug the unit tests could never have caught.
+
+    ``mlflow.xgboost.load_model`` does not round-trip ``enable_categorical``: a
+    model logged with it set to True comes back with False. Predictions are
+    unaffected, but ``shap.TreeExplainer`` reads the flag when it is built and
+    then constructs its own DMatrix without it - so every flagged payment
+    reached the analyst with an empty reasons list, and the only evidence was a
+    warning in the API log.
+
+    Found by running the real thing; it takes a model that has actually been
+    through the registry to see it.
+    """
+    from training.train import log_to_mlflow
+
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    log_to_mlflow(
+        trained, tracking_uri=tracking_uri, experiment="test", registered_model="fraud-test"
+    )
+
+    from serving.model import load_champion
+
+    bundle = load_champion(tracking_uri, "fraud-test", "champion")
+    assert bundle.is_loaded
+    assert bundle.explainer is not None
+
+    matrix = build_matrix(synthetic_training_set(n_rows=60, seed=3).head(1))
+    reasons = bundle.explainer.top_reasons(matrix, top_n=3)
+
+    assert reasons, "a model from the registry must still produce reasons"
+    assert all(reason.contribution > 0 for reason in reasons)
+
+
+def test_predictions_survive_the_registry_round_trip(trained, tmp_path) -> None:
+    """And the scores themselves must be identical, not merely plausible."""
+    import numpy as np
+
+    from serving.model import load_champion
+    from training.train import log_to_mlflow
+
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    log_to_mlflow(
+        trained, tracking_uri=tracking_uri, experiment="test", registered_model="fraud-test"
+    )
+    matrix = build_matrix(synthetic_training_set(n_rows=200, seed=5))
+
+    in_process = trained.model.predict_proba(matrix)[:, 1]
+    from_registry = load_champion(tracking_uri, "fraud-test", "champion").model.predict_proba(
+        matrix
+    )[:, 1]
+
+    np.testing.assert_allclose(in_process, from_registry, rtol=1e-6)

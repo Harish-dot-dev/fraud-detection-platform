@@ -40,10 +40,10 @@ def build_demo_bundle(rows: int = 4000, seed: int = 11) -> ModelBundle:
         params={"n_estimators": 80, "max_depth": 4},
         early_stopping_rounds=20,
     )
-    from serving.model import _limit_threads
+    from serving.model import _restore_serving_params
     from training.explain import Explainer
 
-    _limit_threads(result.model)
+    _restore_serving_params(result.model)
     return ModelBundle(
         model=result.model,
         version="demo",

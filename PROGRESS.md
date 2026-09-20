@@ -18,6 +18,67 @@ phase.
 
 ---
 
+## Integration run against real services (2026-09-20)
+
+Everything below phases 1-6 had only ever been tested against fakes. It has now been run against
+**real Redis, a real Kafka broker and a real MLflow server** - installed natively rather than in
+containers, because this environment's egress policy blocks Docker Hub image layers.
+
+### What ran, end to end
+
+| Step | Result |
+|---|---|
+| `producer.replay` → real Kafka | 1000 events, 958/s, across 3 partitions (227/510/263) |
+| Spark Structured Streaming ← Kafka | 1000 rows → Bronze Delta, partitioned by `event_date` |
+| Online features → real Redis | 44 card states, keyed by token (`fp:card:<32 hex>`) |
+| Bronze → Silver | 1000 rows, **quality 12/12**, no card identifiers |
+| Silver → Gold | 1000 rows |
+| Chargeback labels | 1000 rows; 0 known on the day of the last payment |
+| Training set, default `as_of` | **0 rows** + the explanatory error - the delayed-label logic working |
+| Training set, `--as-of 2023-03-15` | 1000 rows, 3.50% fraud |
+| `training.train` → real MLflow | experiment created, run logged, **version 1 registered and promoted to champion** |
+| API startup | loaded `mlflow:fraud-xgboost@champion`, `pii_salt_configured: true` |
+| `serving.consumer` | 300 payments scored (257 allow / 36 review / 7 block), 0 failed |
+| Decisions → Kafka | 300 records on the `decisions` topic |
+| Audit record | token not card, 18 features, latency, model version, reason - no PII |
+
+### Latency, measured against real services
+
+Real Redis, the champion model from the real registry, decisions to a real broker; one four-core
+host. **Not docker compose** - no container network between the processes - so treat it as a floor.
+
+| Concurrency | p50 | p95 | p99 | req/s |
+|---|---|---|---|---|
+| 1 | 12.7 ms | 20.3 ms | 21.4 ms | 71 |
+| 2 | 27.0 ms | 42.8 ms | 49.4 ms | 68 |
+| 4 | 62.9 ms | 94.9 ms | 125.9 ms | 62 |
+| 8 | 135.3 ms | 195.9 ms | 290.9 ms | 58 |
+
+The real Redis hop costs ~1.3 ms against the in-process fake. Written to `reports/latency.json`.
+
+### The bug it found
+
+**`mlflow.xgboost.load_model` does not round-trip `enable_categorical`** - a model logged with it
+`True` comes back `False`. Predictions are unaffected (verified identical to 1e-6), but
+`shap.TreeExplainer` reads the flag when it is constructed, so **every flagged payment reached the
+analyst with an empty reasons list**. The only evidence was a warning in the API log.
+
+Fixed by restoring the parameter before the explainer is built. Two regression tests added; both
+would have caught it. The in-process tests could not - it takes a model that has actually been
+through a registry.
+
+Verified live afterwards: 7 of 7 known frauds flagged, all 7 with SHAP reasons, zero warnings.
+
+### Still needs your laptop
+
+- **`docker compose up` itself.** The Compose file parses and its profiles resolve, but no image
+  has ever been pulled or built here, so image tags, healthchecks and the container network are
+  unverified. That is now the only substantial gap.
+- The latency number *through* containers, which is the one the README should eventually quote.
+- Ollama and pgvector (phase 8) and Airflow (phase 7) have not been run at all.
+
+---
+
 ## Phase 6 — Serving ✅
 
 ### What is in place
@@ -87,12 +148,11 @@ Throughput is flat at ~80 req/s across every concurrency level, which says the s
 in a single Python process — past that, the number being measured is the queue, not the service.
 The production fix is more uvicorn workers.
 
-### Not verified yet (needs your laptop)
+### Verified since
 
-- The API against **real Redis, real Kafka and a real MLflow registry**. Every test here uses
-  fakeredis, an in-memory sink and a model trained in-process.
-- `make consume` against a live broker.
-- The docker-compose latency number, which is the one the README will quote.
+All of this has now been run against real Redis, Kafka and MLflow - see the integration run at the
+top of this file, including the explainer bug it uncovered. Only `docker compose` itself remains
+untested.
 
 ### Known issues / deliberate gaps
 

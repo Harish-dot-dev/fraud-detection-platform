@@ -86,7 +86,7 @@ def load_champion(
         review = float(metrics.get("review_threshold", fallback_review_threshold))
         block = float(metrics.get("block_threshold", fallback_block_threshold))
 
-        _limit_threads(model)
+        _restore_serving_params(model)
 
         bundle = ModelBundle(
             model=model,
@@ -118,18 +118,31 @@ def load_champion(
         return degraded_bundle(fallback_review_threshold, fallback_block_threshold)
 
 
-def _limit_threads(model: Any) -> None:
-    """Score with one thread.
+def _restore_serving_params(model: Any) -> None:
+    """Fix up a model that has just come back from the registry.
 
-    A single-row prediction gains nothing from parallelism, and the default -
-    one thread per core, per request - collapses under concurrency: eight
-    in-flight requests on four cores produced 32 threads competing for them,
-    and p50 latency went from 36 ms to 526 ms. Measured, not guessed.
+    Two parameters, both of which have to be set **before** the SHAP explainer
+    is built:
+
+    ``enable_categorical`` does not survive the MLflow round trip - a model
+    logged with it set to True comes back with False. Predictions are
+    unaffected (the booster already knows its categorical splits, and the
+    scores are identical either way), but ``shap.TreeExplainer`` reads the flag
+    when it is constructed and then builds its own DMatrix without it. The
+    result is every flagged payment arriving at the analyst with an empty
+    reasons list, while the logs quietly carry a warning nobody reads.
+
+    ``n_jobs=1`` because a single-row prediction gains nothing from
+    parallelism, and the default - one thread per core, per request -
+    collapses under concurrency: eight in-flight requests on four cores
+    produced 32 threads competing for them, and p50 latency went from 36 ms to
+    526 ms. Measured, not guessed.
     """
-    try:
-        model.set_params(n_jobs=1)
-    except Exception:  # pragma: no cover - not every model object supports it
-        logger.debug("could not pin the model to a single thread")
+    for parameter, value in (("enable_categorical", True), ("n_jobs", 1)):
+        try:
+            model.set_params(**{parameter: value})
+        except Exception:  # pragma: no cover - not every model object supports it
+            logger.debug("could not set %s on the loaded model", parameter)
 
 
 def _build_explainer(model: Any) -> Any:
