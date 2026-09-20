@@ -16,8 +16,8 @@ component by component and is filled in as each phase lands.
 | XGBoost model + MLflow registry | 5 | done (time split, cost-tuned thresholds, SHAP) |
 | Rules engine (`rules/`) | 6 | done |
 | Scoring API (`serving/`) | 6 | done (`/score`: rules + model + SHAP + audit log) |
-| Airflow DAGs (`airflow/dags/`) | 7 | not started |
-| dbt models (`dbt/`) | 7 | not started |
+| Airflow DAGs (`airflow/dags/`) | 7 | done (both DAGs run green end to end) |
+| dbt models (`dbt/`) | 7 | done (7 models, 33 tests) |
 | GenAI assistant (`genai/`) | 8 | not started |
 | Analyst app (`analyst_app/`) | 9 | not started |
 | Dashboard (`dashboard/`) | 9 | not started |

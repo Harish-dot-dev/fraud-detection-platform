@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 6 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 7 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
@@ -115,6 +115,13 @@ make dataset                       # point-in-time training set
 make train                         # -> reports/metrics.json, reports/thresholds.json
 ```
 
+Then build the warehouse and the dashboards' data:
+
+```bash
+make warehouse                     # export -> dbt build (7 models, 33 tests) -> drift report
+make airflow                       # or orchestrate all of it: http://localhost:8080
+```
+
 Then score payments through the API:
 
 ```bash
@@ -161,7 +168,7 @@ Compose profiles let you run a subset of the stack:
 |---|---|---|---|
 | `core` | kafka, redis, mlflow, api | ~4.0 GB | `make up` |
 | `ai` | ollama, pgvector | ~4.5 GB | `make up-ai` (adds to core) |
-| `orchestration` | airflow + metadata DB | phase 7 | — |
+| `orchestration` | airflow (standalone) | ~3.0 GB | `make airflow` |
 | `dashboard` | superset | phase 9 | — |
 
 On a 16 GB laptop, `core` + `ai` is the intended maximum. Every container has an explicit

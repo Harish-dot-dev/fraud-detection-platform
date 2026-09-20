@@ -96,6 +96,7 @@ packages = [
     "producer",
     "streaming",
     "training",
+    "warehouse",
     "genai",
     "eval",
 ]
@@ -124,4 +125,5 @@ markers = [
     "slow: tests that take more than a few seconds (excluded from the fast CI job)",
     "needs_spark: requires a local Spark session and Java 17",
     "needs_ollama: requires a running Ollama server with the configured model pulled",
+    "needs_dbt: requires dbt-core and dbt-duckdb (the `dbt` extra)",
 ]

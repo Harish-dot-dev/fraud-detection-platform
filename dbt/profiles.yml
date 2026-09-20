@@ -1,0 +1,15 @@
+# Kept in the repo rather than ~/.dbt so that `make dbt` works on a fresh
+# clone. It contains no credentials: DuckDB is a file.
+
+fraud_platform:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'data/warehouse/fraud.duckdb') }}"
+      # Where warehouse/export.py puts the Parquet snapshots.
+      extensions: []
+      settings:
+        # Laptop-friendly: DuckDB otherwise takes as much memory as it likes.
+        memory_limit: "2GB"
+        threads: 4

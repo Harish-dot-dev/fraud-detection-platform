@@ -51,7 +51,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[ml,dev]"
+          pip install -e ".[ml,dev,dbt]"
 
       - name: Run the fast test suite
         run: pytest -m "not slow and not needs_spark and not needs_ollama" --cov=. --cov-report=term-missing

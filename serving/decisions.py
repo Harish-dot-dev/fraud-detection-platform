@@ -60,6 +60,14 @@ class Decision:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["decided_at"] = self.decided_at.isoformat()
+        # A SHAP reason's value is a number for a numeric feature and a label
+        # for a categorical one. Left as a union it would be unreadable by the
+        # Spark schema that lands this topic in Delta, so it is always a
+        # string on the wire; the typed value stays available in Python.
+        payload["top_reasons"] = [
+            {**reason, "value": None if reason.get("value") is None else str(reason["value"])}
+            for reason in payload.get("top_reasons") or []
+        ]
         return payload
 
     def to_json(self) -> str:

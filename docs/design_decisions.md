@@ -502,6 +502,89 @@ phases of green unit tests, a feature silently not working.
 
 ---
 
+## Phase 7 — Orchestration and analytics
+
+### Every Airflow task is a subprocess, not an import
+
+The DAGs run `python -m streaming.silver` rather than importing the pipeline into the Airflow
+worker. Three reasons, all practical:
+
+* the Spark jobs need their own JVM and their own process anyway;
+* Airflow's dependency set is large and opinionated — keeping the platform's dependencies out of it
+  means an Airflow upgrade cannot break the model, and a pandas upgrade cannot break the scheduler;
+* every job already has a command-line entry point, so **the DAG runs exactly what a human would
+  type** at 3am when something has gone wrong.
+
+### The quality gate is the pipeline's safety catch
+
+`streaming/silver.py` refuses to write a table that fails its Great Expectations suite, so
+everything downstream of it is either built on checked data or not built at all. A pipeline that
+carries on past a failed quality gate — leaving the dashboard showing yesterday's numbers next to
+today's date — is worse than one that stops.
+
+### The warehouse reads a snapshot, not the live tables
+
+DuckDB has a Delta extension and it is the obvious thing to reach for. This project publishes
+Parquet snapshots instead, because the extension is downloaded at runtime: a laptop that is offline
+— or behind a proxy that blocks the extension host, which is exactly what happened here — gets a
+warehouse that cannot read anything.
+
+It is also the more honest architecture. The Delta tables are the operational store; the warehouse
+holds a snapshot that analysts and dashboards query without contending with the jobs that write it.
+That separation is what makes the read-only Superset and Power BI paths possible.
+
+### The warehouse distinguishes "decided" from "was right"
+
+`fct_decisions` leaves the label null until `label_available_at` has passed, so every downstream
+model has to be explicit about which question it is answering. Volumes — how many payments were
+reviewed, how big the queue was, what the latency was — are known immediately. Accuracy is known
+weeks later. Reporting the two as though they arrive together is the most common way a fraud
+dashboard misleads, and `agg_daily_kpis` splits them into separate column groups for exactly that
+reason.
+
+A dbt test (`assert_labels_are_not_used_early.sql`) enforces it: if a label ever appears before its
+chargeback arrived, the build fails. That is the reporting equivalent of training on the future.
+
+### A rule that fires constantly and is rarely right is a tax
+
+`agg_rule_effectiveness` exists because rules get written under time pressure and then never
+revisited. Hit rate per rule, against matured labels, is what tells you a rule is protecting the
+business rather than just filling the analyst queue.
+
+### `dbt build`, not `dbt run`
+
+The DAG runs `dbt build`, which runs the models *and* their tests, so a failing test stops the
+pipeline instead of publishing a dashboard nobody should trust.
+
+The range test is written out as a local macro rather than pulled from `dbt_utils`. That would be a
+package download at build time, and this project is meant to run on a laptop with no network — one
+macro is cheaper than a dependency.
+
+### Retraining promotes on merit, or not at all
+
+The weekly DAG rebuilds the training set **as of the run date**, so a re-run of an old week
+reproduces that week's data exactly and a model trained there has not seen the future. It registers
+the challenger every time; the `champion` alias moves only if PR-AUC on the latest test window
+improves. A retrain that quietly promoted a worse model every Sunday would be worse than no
+retrain, because nobody would be looking.
+
+Verified in an actual DAG run: version 2 trained, scored identically to the incumbent, and was
+**left as a challenger**.
+
+### Drift produces a report, not an alert that blocks
+
+Feature drift and prediction drift both mean *somebody should look*, not *stop the pipeline*.
+Prediction drift is the earlier signal of the two because it needs no labels — and labels are weeks
+away.
+
+A second bug worth recording: Evidently's `DataDriftPreset` emits two metrics, a summary and a
+per-column table, and an earlier version of the code read the summary's position for both. The
+report said **"0 of 18 columns drifted (66.7%)"** — internally contradictory, and exactly what a
+monitoring tool must never say. A monitoring tool that reports nonsense is worse than no monitoring,
+so there is now a test asserting the count and the share describe the same thing.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.

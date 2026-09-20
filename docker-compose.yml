@@ -238,8 +238,54 @@ services:
     mem_limit: 512m
     restart: unless-stopped
 
+  # --- Orchestration --------------------------------------------------------
+  # `airflow standalone` runs the scheduler, the webserver and a SQLite
+  # metadata database in one process. That is the right trade for a laptop: a
+  # production deployment would use Postgres with the scheduler and webserver
+  # split, and this is explicitly not that.
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    image: fraud-platform/airflow:0.1.0
+    container_name: fraud-airflow
+    profiles: ["orchestration"]
+    command: ["airflow", "standalone"]
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/fraud-platform/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # The DAGs shell out to these.
+      FRAUD_PROJECT_ROOT: /opt/fraud-platform
+      FRAUD_PYTHON: python
+      # Inside the network these resolve to the other services.
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      WAREHOUSE_EXPORT: /opt/fraud-platform/data/warehouse/export
+      DUCKDB_PATH: /opt/fraud-platform/data/warehouse/fraud.duckdb
+    volumes:
+      # The repository, so a DAG edit takes effect without a rebuild, and the
+      # data directory, shared with the Spark jobs.
+      - ./:/opt/fraud-platform
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    # Airflow plus a JVM for the Spark tasks it launches.
+    mem_limit: 3072m
+    restart: unless-stopped
+
   # --- Services added in later phases ---------------------------------------
-  # airflow + db     (phase 7) profile: orchestration
   # analyst-app      (phase 9) profile: ai
   # superset         (phase 9) profile: dashboard
   # They are deliberately absent until the code they run exists, so that

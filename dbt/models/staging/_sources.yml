@@ -1,0 +1,46 @@
+version: 2
+
+sources:
+  - name: platform
+    description: >
+      Parquet snapshots of the Delta layers, published by `make export`. The
+      Delta tables themselves stay with the jobs that write them; the warehouse
+      reads a snapshot, which is what lets a dashboard query it without
+      contending for the files.
+    meta:
+      external_location: "read_parquet('{{ env_var('WAREHOUSE_EXPORT', 'data/warehouse/export') }}/{name}/*.parquet')"
+    tables:
+      - name: silver
+        description: Cleaned, deduplicated, tokenised payments.
+        columns:
+          - name: transaction_id
+            tests: [unique, not_null]
+          - name: card_token
+            tests: [not_null]
+          - name: amount
+            tests: [not_null]
+      - name: decisions
+        description: Every scoring decision the platform has made.
+        columns:
+          - name: transaction_id
+            tests: [not_null]
+          - name: decision
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ["allow", "review", "block"]
+      - name: chargebacks
+        description: >
+          Labels with the date each became known. Joining on these without
+          respecting label_available_at is how a dashboard ends up reporting
+          performance it could not have known at the time.
+        columns:
+          - name: transaction_id
+            tests: [unique, not_null]
+          - name: is_fraud
+            tests:
+              - not_null
+              - accepted_values:
+                  values: [0, 1]
+      - name: gold
+        description: Offline features, one row per payment.

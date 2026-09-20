@@ -15,6 +15,7 @@ COMPOSE := docker compose
 .PHONY: help env install lint fmt test test-all sample data up up-ai down ps logs \
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      silver gold quality features labels dataset train consume load-test demo-api \
+	      export dbt drift decisions-sink warehouse airflow airflow-logs \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -140,6 +141,29 @@ load-test: ## Measure /score latency across concurrency levels -> reports/latenc
 demo-api: ## Run the API with no Docker at all (fakeredis + a model trained in-process)
 	$(PY) -m tests.demo_server
 
+export: ## Publish the Delta tables to Parquet for the warehouse
+	$(COMPOSE) run --rm spark python -m warehouse.export
+
+dbt: ## Build and test the dbt models on DuckDB
+	cd dbt && DUCKDB_PATH=$${DUCKDB_PATH:-../data/warehouse/fraud.duckdb} \
+	  WAREHOUSE_EXPORT=$${WAREHOUSE_EXPORT:-../data/warehouse/export} \
+	  ../$(VENV)/bin/dbt build --profiles-dir . --project-dir .
+
+drift: ## Evidently drift report -> reports/drift_*.html and drift.json
+	$(PY) -m quality.drift
+
+decisions-sink: ## Land the decisions topic in Delta (once)
+	$(COMPOSE) run --rm spark python -m streaming.decisions_sink --once
+
+warehouse: export dbt drift ## Export, transform, test and check for drift
+
+airflow: ## Start Airflow (orchestration profile) at http://localhost:8080
+	$(COMPOSE) --profile orchestration up -d --build
+	@echo "Airflow: http://localhost:8080 (the standalone password is printed in its logs)"
+
+airflow-logs: ## Follow the Airflow logs (the admin password is in here)
+	$(COMPOSE) logs -f airflow
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -155,7 +179,6 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 
 # ---------------------------------------------------------------------------
 # Targets below arrive with their phase:
-#   airflow / dbt      (phase 7)
 #   llm-eval           (phase 8)   -> reports/llm_eval.json
 #   app / dashboard    (phase 9)
 #   metrics            (phase 10)  regenerate every reports/*.json

@@ -1,0 +1,27 @@
+# dbt project for the fraud warehouse.
+#
+# Sources are Parquet snapshots published by `make export` rather than the
+# Delta tables directly (warehouse/export.py explains why). Everything below
+# is ordinary SQL on DuckDB.
+
+name: fraud_platform
+version: "1.0.0"
+config-version: 2
+
+profile: fraud_platform
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  fraud_platform:
+    staging:
+      # Views: thin renaming and typing over the source snapshots, no reason
+      # to materialise a second copy of the data.
+      +materialized: view
+    marts:
+      # Tables: the dashboards query these repeatedly and they are small.
+      +materialized: table

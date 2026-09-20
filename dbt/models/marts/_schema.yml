@@ -1,0 +1,90 @@
+version: 2
+
+models:
+  - name: fct_decisions
+    description: >
+      One row per payment: what the platform decided, and - once the dispute
+      window closed - whether it was right. The label is null until
+      label_available_at has passed, so nothing downstream can accidentally
+      report accuracy it could not have known at the time.
+    columns:
+      - name: transaction_id
+        description: Unique per payment; duplicate scoring attempts are ranked away.
+        tests:
+          - unique
+          - not_null
+      - name: decision
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["allow", "review", "block"]
+      - name: outcome
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - pending
+                - fraud_blocked
+                - fraud_to_review
+                - fraud_missed
+                - false_block
+                - false_review
+                - correctly_allowed
+      - name: latency_ms
+        tests:
+          - not_null
+      - name: card_token
+        description: Tokenised card identity. Never a card number or an address.
+        tests:
+          - not_null
+
+  - name: agg_daily_kpis
+    description: >
+      The daily fraud dashboard. Volumes are known immediately; outcomes only
+      once chargebacks arrive, so the two are reported separately.
+    columns:
+      - name: decision_date
+        tests: [unique, not_null]
+      - name: payments_scored
+        tests: [not_null]
+      - name: review_rate
+        tests:
+          - not_null
+          - dbt_utils_accepted_range:
+              min_value: 0
+              max_value: 1
+      - name: false_positive_rate
+        description: Null while labels are still pending, which is not the same as zero.
+        tests:
+          - dbt_utils_accepted_range:
+              min_value: 0
+              max_value: 1
+
+  - name: agg_model_performance
+    description: Precision and recall per model version, over matured labels only.
+    columns:
+      - name: precision_at_block
+        tests:
+          - dbt_utils_accepted_range:
+              min_value: 0
+              max_value: 1
+      - name: recall_at_block
+        tests:
+          - dbt_utils_accepted_range:
+              min_value: 0
+              max_value: 1
+
+  - name: agg_rule_effectiveness
+    description: >
+      How often each rule fires and how often it is right. A rule that fires
+      constantly and is rarely correct is a tax on the analyst queue.
+    columns:
+      - name: rule_name
+        tests: [unique, not_null]
+      - name: times_fired
+        tests: [not_null]
+      - name: hit_rate
+        tests:
+          - dbt_utils_accepted_range:
+              min_value: 0
+              max_value: 1

@@ -11,10 +11,81 @@ phase.
 | 4. Labels and training data | ✅ done |
 | 5. Model | ✅ done |
 | 6. Serving | ✅ done |
-| 7. Orchestration and analytics | ⬜ not started |
+| 7. Orchestration and analytics | ✅ done |
 | 8. GenAI assistant | ⬜ not started |
 | 9. Analyst app and dashboard | ⬜ not started |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 7 — Orchestration and analytics ✅
+
+### What is in place
+
+- **`airflow/dags/fraud_batch_daily.py`** — land decisions, Bronze → Silver (quality-gated) → Gold,
+  reload chargebacks, export, `dbt build`, drift report.
+- **`airflow/dags/fraud_retrain_weekly.py`** — rebuild the training set *as of the run date*,
+  retrain, register, and promote to champion only on a better PR-AUC.
+- **`streaming/decisions_sink.py`** — the decisions topic → Delta, so analytics can never slow
+  down scoring.
+- **`warehouse/export.py`** (`make export`) — Parquet snapshots of every Delta layer for DuckDB.
+- **`dbt/`** — 7 models (3 staging, 4 marts) and **33 tests**, including two bespoke ones: every
+  flagged decision must be attributable to a rule or a model, and no label may be used before its
+  chargeback arrived.
+- **`quality/drift.py`** (`make drift`) — Evidently feature and prediction drift, HTML for a human
+  and JSON for Airflow.
+- **`docker/airflow.Dockerfile`** + an `orchestration` Compose profile.
+
+### How to run it
+
+```bash
+make warehouse       # export -> dbt build -> drift, in one go
+make airflow         # Airflow at http://localhost:8080
+make airflow-logs    # the standalone admin password is printed here
+```
+
+### Verified
+
+Run on 2026-09-20 against the real services from the integration run above — real Kafka, real
+Redis, real MLflow — and orchestrated by a **real Airflow 2.10.3 scheduler**:
+
+- `airflow dags list-import-errors` — none.
+- **`fraud_batch_daily`: all 9 tasks SUCCESS, DagRun state=success.** That is real Spark jobs, the
+  quality gate, `dbt build` with its tests, and the drift report, in dependency order.
+- **`fraud_retrain_weekly`: all 5 tasks SUCCESS.** Version 2 trained and registered, scored
+  identically to the incumbent, and was correctly **left as a challenger** — the promotion rule
+  doing its job.
+- `dbt build` standalone — **PASS=40, ERROR=0** (7 models, 33 tests) on real pipeline data.
+- Fast suite — **221 passed**; Spark suite — **54 passed**; ruff clean.
+
+Real warehouse output, from the pipeline's own decisions:
+
+| payments | reviewed | blocked | fraud blocked | fraud missed | false blocks | FPR |
+|---|---|---|---|---|---|---|
+| 848 | 113 | 26 | 25 | 1 | 1 | 0.12% |
+
+848 payments from 6,807 scoring attempts — the deduplication in `stg_decisions` working, since the
+load tests scored the same fixture repeatedly.
+
+### Fixed along the way
+
+**Evidently's `DataDriftPreset` emits two metrics** — a summary and a per-column table — and the
+first version read the summary's position for both. The report said *"0 of 18 columns drifted
+(66.7%)"*: internally contradictory, and exactly what a monitoring tool must never say. Now looked
+up by metric name, with a test asserting the count and the share describe the same thing.
+
+### Not verified yet (needs your laptop)
+
+- **The Airflow container.** The DAGs and every job they call have been run for real, but
+  `docker/airflow.Dockerfile` has never been built — Docker Hub base images are blocked here.
+  It is the same gap as the rest of Compose.
+
+### Known issues / deliberate gaps
+
+- Airflow runs as `airflow standalone` with SQLite: right for a laptop, explicitly not production.
+- Silver and Gold are full rebuilds each run, so the daily DAG's cost grows with total data rather
+  than with the day's volume.
+- The warehouse is a snapshot, so dashboards are as fresh as the last export.
 
 ---
 
