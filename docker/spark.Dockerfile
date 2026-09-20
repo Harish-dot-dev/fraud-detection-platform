@@ -5,8 +5,11 @@
 
 FROM python:3.11.10-slim-bookworm
 
+# libgomp1 is the OpenMP runtime XGBoost links against; the training job runs
+# in this image too.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-17-jre-headless procps curl \
+    && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless procps curl libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
@@ -24,7 +27,7 @@ RUN mkdir -p features serving producer streaming training genai eval common \
     && touch features/__init__.py serving/__init__.py producer/__init__.py \
        streaming/__init__.py training/__init__.py genai/__init__.py eval/__init__.py \
        common/__init__.py \
-    && pip install --no-cache-dir ".[spark,quality]"
+    && pip install --no-cache-dir ".[spark,quality,ml]"
 
 # Resolve the Delta and Kafka connector jars at build time so that starting a
 # job does not depend on Maven Central being reachable (and does not spend the

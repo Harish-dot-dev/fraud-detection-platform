@@ -16,9 +16,16 @@ It is NOT a statistical clone of the real data. It has:
   * card-level structure, so per-card velocity features have something to find,
   * fraud injected as *bursts* on a compromised card with a new device,
 
-which is enough to exercise the feature, training and scoring code. Any model
-metric produced from this data is meaningless as a measure of real performance
-and must never be published as one.
+which is enough to exercise the feature, training and scoring code.
+
+The fraudulent and legitimate distributions overlap **heavily**, by design. An
+earlier version separated them cleanly and a model trained on it scored a
+PR-AUC of 1.000 - which tests nothing, because every threshold and every cost
+trade-off is degenerate when the classes are perfectly separable. The overlap
+here keeps the model, the threshold tuner and the cost model doing real work.
+
+Any model metric produced from this data is still meaningless as a measure of
+real performance and must never be published as one.
 """
 
 from __future__ import annotations
@@ -227,17 +234,16 @@ def generate_transactions(
             "dist1": float(rng.integers(0, 400)) if rng.random() < 0.40 else np.nan,
             "dist2": float(rng.integers(0, 400)) if rng.random() < 0.07 else np.nan,
             "P_emaildomain": card.email,
-            # Fraud often shows a mismatched recipient domain.
-            "R_emaildomain": (
-                str(rng.choice(_EMAIL_DOMAINS))
-                if fraud or rng.random() < 0.25
-                else (card.email if rng.random() < 0.5 else np.nan)
-            ),
+            # Fraud shows a mismatched recipient domain more often - but only
+            # somewhat. An earlier version made the column present for every
+            # fraud and absent for most legitimate payments, which handed the
+            # model the label.
+            "R_emaildomain": _recipient_domain(rng, card, fraud),
         }
 
         # C1-C14: counting features (how many addresses/phones/emails are
         # associated with the card). Higher counts correlate with fraud.
-        count_scale = 6.0 if fraud else 1.5
+        count_scale = 2.5 if fraud else 1.5
         for c in _C_COLUMNS:
             row[c] = float(rng.poisson(count_scale))
 
@@ -255,7 +261,7 @@ def generate_transactions(
             elif m == "M4":
                 row[m] = str(rng.choice(["M0", "M1", "M2"]))
             else:
-                row[m] = "F" if rng.random() < (0.55 if fraud else 0.15) else "T"
+                row[m] = "F" if rng.random() < (0.45 if fraud else 0.20) else "T"
 
         # V1-V339: Vesta's engineered features. Left empty except for a small
         # populated block, mirroring how sparse this part of the real file is.
@@ -264,7 +270,7 @@ def generate_transactions(
         for v in _POPULATED_V_COLUMNS:
             row[v] = float(rng.integers(0, 3))
         for v in _SIGNAL_V_COLUMNS:
-            row[v] = round(float(rng.normal(3.0 if fraud else 0.0, 1.0)), 4)
+            row[v] = round(float(rng.normal(0.8 if fraud else 0.0, 1.0)), 4)
 
         rows.append(row)
 
@@ -278,6 +284,14 @@ def generate_transactions(
     transactions = pd.DataFrame(rows, columns=TRANSACTION_COLUMNS)
     identity = pd.DataFrame(identity_rows, columns=IDENTITY_COLUMNS)
     return transactions, identity
+
+
+def _recipient_domain(rng: np.random.Generator, card: _Card, fraud: bool):
+    """Pick a recipient email domain for one payment."""
+    if rng.random() < (0.55 if fraud else 0.35):
+        # A domain unrelated to the cardholder's own.
+        return str(rng.choice(_EMAIL_DOMAINS))
+    return card.email if rng.random() < 0.5 else np.nan
 
 
 def _make_identity_row(
@@ -309,7 +323,7 @@ def _make_identity_row(
 
     # A device the card has never been seen on is one of the strongest signals
     # available at scoring time, so fraud rows usually carry an unfamiliar one.
-    if fraud and rng.random() < 0.8:
+    if fraud and rng.random() < 0.6:
         row["DeviceType"] = str(rng.choice(["desktop", "mobile"]))
         row["DeviceInfo"] = str(rng.choice(_DEVICE_INFO))
     else:

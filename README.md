@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 4 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 5 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
@@ -105,11 +105,14 @@ make stream-logs                   # watch Spark land them in Bronze Delta
 make bronze-peek                   # row counts, card counts, time range
 ```
 
-Then build the batch layers:
+Then build the batch layers and train a model:
 
 ```bash
 make features                      # Bronze -> Silver (tokenised) -> Gold (offline features)
 make quality                       # Great Expectations suite -> reports/quality_silver.json
+make labels                        # chargebacks, with their real arrival delay
+make dataset                       # point-in-time training set
+make train                         # -> reports/metrics.json, reports/thresholds.json
 ```
 
 `make produce-preview` prints a couple of payment events without needing Docker at all — the
@@ -164,12 +167,12 @@ real dataset.
 
 | Metric | Value | Source |
 |---|---|---|
-| PR-AUC (test window) | *not yet measured* | `reports/metrics.json` (phase 5) |
-| Precision @ block threshold | *not yet measured* | `reports/metrics.json` (phase 5) |
-| Recall @ block threshold | *not yet measured* | `reports/metrics.json` (phase 5) |
-| Fraud value caught vs missed | *not yet measured* | `reports/metrics.json` (phase 5) |
-| False positive rate | *not yet measured* | `reports/metrics.json` (phase 5) |
-| Chosen thresholds + cost rationale | *not yet measured* | `reports/thresholds.json` (phase 5) |
+| PR-AUC (test window) | *not yet measured* | `make train` → `reports/metrics.json` |
+| Precision @ block threshold | *not yet measured* | `make train` → `reports/metrics.json` |
+| Recall @ block threshold | *not yet measured* | `make train` → `reports/metrics.json` |
+| Fraud value caught vs missed | *not yet measured* | `make train` → `reports/metrics.json` |
+| False positive rate | *not yet measured* | `make train` → `reports/metrics.json` |
+| Chosen thresholds + cost rationale | *not yet measured* | `make train` → `reports/thresholds.json` |
 | `/score` p50 / p95 / p99 latency | *not yet measured* | `reports/latency.json` (phase 6) |
 | LLM factual accuracy / schema validity | *not yet measured* | `reports/llm_eval.json` (phase 8) |
 | Retrieval quality (label match) | *not yet measured* | `reports/llm_eval.json` (phase 8) |

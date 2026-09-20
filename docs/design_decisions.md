@@ -302,6 +302,94 @@ Feature leakage and label leakage are different defects and both are tested:
 
 ---
 
+## Phase 5 — The model
+
+### Accuracy is not reported anywhere
+
+Fraud is 3.5% of payments, so a model that answers "not fraud" to everything is 96.5% accurate and
+catches nothing. What is reported instead: **PR-AUC** (the summary metric for a rare positive
+class), **precision and recall at the chosen operating points** rather than at 0.5, and **money** —
+the fraud value caught versus missed.
+
+That last one matters more than it looks. A model can catch 75% of fraudulent *payments* while
+missing the expensive ones; there is a test (`test_recall_by_count_and_by_value_can_disagree`) that
+pins exactly that case, where 75% recall lets over 90% of the fraud value walk out of the door.
+
+ROC-AUC is logged for reference but not headlined: with 96.5% negatives, the huge true-negative
+count drowns out the false positives and it flatters the model.
+
+### Thresholds are a business decision, so they are chosen by cost
+
+There is no statistically correct place to put a threshold, only a business one. So the operating
+point minimises expected cost: a missed fraud costs the transaction amount, a wrongly blocked
+payment costs a fixed friction charge, and a review costs an analyst's handling fee.
+
+The asymmetry is the point. A 20 euro fraud and a 2,000 euro fraud are not the same miss, so
+"optimal F1" is the wrong tool — it treats every error as equal when the business does not. Tests
+assert the tuner responds the way a business would expect: raise the cost of annoying a customer
+and fewer payments get blocked; raise the cost of an analyst and the review queue shrinks.
+
+One optimistic assumption is baked in and worth saying out loud: a payment sent to review is
+assumed to be resolved correctly. Real analysts are not perfect, so the review band looks slightly
+cheaper here than it would in production.
+
+The search is exact over a candidate grid rather than approximate: sort the scores once, precompute
+cumulative sums, and the cost of any threshold pair becomes three array lookups — which makes a
+100×100 grid instant even on a million rows.
+
+### Thresholds are tuned on validation, never on test
+
+Tuning the operating point on the test window means choosing it using the data the result is then
+reported on. The number would be real but unreproducible in production. So: train on the training
+window, tune thresholds on validation, report on a test window that neither the model nor the
+thresholds ever saw.
+
+### Imbalance: `scale_pos_weight`, not resampling
+
+With 3.5% positives an unweighted model reaches a good loss by predicting "legitimate" almost
+everywhere. Weighting the positive class by the imbalance ratio makes a missed fraud as expensive
+to the loss function as it is to the business.
+
+Chosen over SMOTE or undersampling because it changes no data: synthesising fraud rows would
+invent card histories that never happened, and undersampling throws away the majority-class
+detail that makes the rare signal stand out.
+
+### Categorical vocabularies live in code, not in a fitted encoder
+
+An encoder artifact can drift out of step with the model file and has to be loaded and versioned
+separately at serving time. A vocabulary in code is versioned with the code, reviewable in a diff,
+and impossible to forget to ship. The cost is that a genuinely new email domain is encoded as
+"other" until somebody updates the list — a visible change rather than a silent re-encoding on the
+next retrain.
+
+Unknown and absent values are kept distinct (`other` vs `missing`): a payment with an unfamiliar
+email domain and a payment with no email domain at all are not the same event.
+
+### SHAP, because "0.87" is not a reason
+
+A fraud analyst cannot act on a score. SHAP gives each feature a signed contribution to *this*
+payment's score, and for tree models it is exact and fast — no sampling — which is what makes it
+usable on the scoring path rather than only in a notebook. Only risk-*increasing* contributions are
+surfaced: someone reviewing a flagged payment wants to know what made it look bad.
+
+### Promotion rule: PR-AUC on the most recent test window
+
+A challenger replaces the champion only if it beats the incumbent on the latest test window.
+Explicit, checkable, and boring on purpose — phase 7 runs exactly this from Airflow each week.
+
+### The fixture was made harder on purpose
+
+The first training run on the synthetic fixture returned a PR-AUC of **1.000**. Perfect separation
+tests nothing: every threshold is equally good, the cost model has no trade-off to make, and
+anybody reading the output would reasonably assume the number was fabricated.
+
+The generator's fraud and legitimate distributions now overlap heavily, and one outright giveaway
+was removed (the recipient email domain was present for every fraud and absent for most legitimate
+payments, which handed the model the label). Fixture numbers remain meaningless as a measure of
+real performance — but the pipeline now has to do real work to produce them.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.

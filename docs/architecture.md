@@ -13,7 +13,7 @@ component by component and is filled in as each phase lands.
 | Medallion layers (Bronze / Silver / Gold) | 2–3 | done |
 | Chargeback label simulation | 4 | done |
 | Point-in-time training set builder (`training/`) | 4 | done (leakage-tested) |
-| XGBoost model + MLflow registry | 5 | not started |
+| XGBoost model + MLflow registry | 5 | done (time split, cost-tuned thresholds, SHAP) |
 | Rules engine (`rules/`) | 6 | not started |
 | Scoring API (`serving/`) | 6 | skeleton: `GET /health` |
 | Airflow DAGs (`airflow/dags/`) | 7 | not started |

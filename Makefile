@@ -14,7 +14,7 @@ COMPOSE := docker compose
 
 .PHONY: help env install lint fmt test test-all sample data up up-ai down ps logs \
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
-	      silver gold quality features labels dataset \
+	      silver gold quality features labels dataset train \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -128,6 +128,9 @@ labels: ## Build the chargeback table (labels, with their real arrival delay)
 dataset: ## Build a point-in-time training set. e.g. make dataset ARGS="--as-of 2023-04-01"
 	$(COMPOSE) run --rm spark python -m training.dataset $(ARGS)
 
+train: ## Train the model, tune thresholds, log to MLflow -> reports/metrics.json
+	$(COMPOSE) run --rm spark python -m training.train $(ARGS)
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -143,7 +146,6 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 
 # ---------------------------------------------------------------------------
 # Targets below arrive with their phase:
-#   train              (phase 5)   train + register the model
 #   load-test          (phase 6)   measure /score latency -> reports/latency.json
 #   airflow / dbt      (phase 7)
 #   llm-eval           (phase 8)   -> reports/llm_eval.json

@@ -9,12 +9,82 @@ phase.
 | 2. Streaming ingestion | ✅ done |
 | 3. Features | ✅ done |
 | 4. Labels and training data | ✅ done |
-| 5. Model | ⬜ not started |
+| 5. Model | ✅ done |
 | 6. Serving | ⬜ not started |
 | 7. Orchestration and analytics | ⬜ not started |
 | 8. GenAI assistant | ⬜ not started |
 | 9. Analyst app and dashboard | ⬜ not started |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 5 — Model ✅
+
+### What is in place
+
+- **`training/preprocessing.py`** — the model input schema, defined once for training and for
+  serving: 57 columns in a fixed order, categorical vocabularies in code (no encoder artifact to
+  ship separately), and `other` kept distinct from `missing`.
+- **`training/split.py`** — time-based train/validation/test split. Never random.
+- **`training/thresholds.py`** — cost-based tuning of the two thresholds. Exact search over a
+  candidate grid using cumulative sums, so a 100×100 grid is instant on a million rows.
+- **`training/evaluate.py`** — PR-AUC, precision/recall at the chosen operating points, false
+  positive rate, and the fraud **value** caught versus missed. No accuracy anywhere.
+- **`training/explain.py`** — SHAP top reasons per decision, plus global feature importance logged
+  with every run.
+- **`training/train.py`** (`make train`) — the whole cycle: split, fit with `scale_pos_weight`,
+  tune thresholds on validation, evaluate on test, log to MLflow, register, and promote to
+  champion only if it beats the incumbent's PR-AUC.
+
+### How to run it
+
+```bash
+make labels && make dataset ARGS="--as-of 2023-04-01"
+make train                      # -> reports/metrics.json, reports/thresholds.json
+make train ARGS="--no-mlflow"   # without a tracking server
+```
+
+### Verified
+
+Run on 2026-09-20. Full chain executed head to tail on synthetic data — Bronze → Silver → Gold →
+labels → point-in-time training set (Delta) → `python -m training.train` → report files on disk:
+
+```
+train 5600 rows (to 2023-01-04), validation 1200 rows, test 1200 rows
+thresholds: review >= 0.045, block >= 0.655 (expected cost 524 vs 12,941 doing nothing)
+test:       PR-AUC 0.949 | precision 0.933, recall 0.700 | FPR 0.0017
+            fraud value caught 98.5% (134 missed of 9,225)
+```
+
+**These numbers are from synthetic data and mean nothing about real performance.** They are
+recorded here only as evidence that the pipeline runs and writes the files the README will quote
+from. The real ones come from your laptop with the Kaggle data.
+
+- Fast suite — **153 passed** in 19 s (includes a real XGBoost fit, SHAP, and MLflow registry
+  round-trips against SQLite).
+- Spark suite — **54 passed** in 96 s.
+- `make lint` — clean.
+
+### Changed along the way
+
+- **The synthetic fixture was made harder.** The first training run scored a PR-AUC of *1.000* —
+  the generator's classes were perfectly separable, which tests nothing and looks fabricated. The
+  distributions now overlap heavily and one giveaway was removed (the recipient email domain was
+  present for every fraud and absent for most legitimate payments). The committed fixture was
+  regenerated; all downstream tests still pass.
+- **MLflow API**: `log_model(..., artifact_path=...)`, not `name=` — the latter is MLflow 3.x.
+
+### Not verified yet (needs your laptop)
+
+- MLflow **server** — the registry is exercised against SQLite in tests, not against the `mlflow`
+  container.
+- Training on the real IEEE-CIS data. Every number above is synthetic.
+
+### Known issues / deliberate gaps
+
+- The review band assumes analysts resolve every case correctly, so it looks slightly cheaper than
+  it would in production.
+- No model is served yet — the API still reports `model_loaded: false`. That is phase 6.
 
 ---
 
