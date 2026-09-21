@@ -36,12 +36,14 @@ from genai.embeddings import EMBEDDING_DIMENSIONS, Embedder
 
 logger = logging.getLogger("genai.case_store")
 
-TABLE = "fraud_cases"
+DEFAULT_TABLE = "fraud_cases"
 
-SCHEMA = f"""
+# Parameterised for the same reason as the review store: tests get their own
+# table without patching module state.
+SCHEMA_TEMPLATE = """
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS {TABLE} (
+CREATE TABLE IF NOT EXISTS {table} (
     transaction_id   BIGINT PRIMARY KEY,
     card_token       TEXT NOT NULL,
     occurred_at      TIMESTAMPTZ NOT NULL,
@@ -55,10 +57,10 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     resolution       TEXT NOT NULL DEFAULT 'chargeback',
     description      TEXT NOT NULL,
     facts            JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-    embedding        vector({EMBEDDING_DIMENSIONS}) NOT NULL
+    embedding        vector({dimensions}) NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS {TABLE}_occurred_at_idx ON {TABLE} (occurred_at);
+CREATE INDEX IF NOT EXISTS {table}_occurred_at_idx ON {table} (occurred_at);
 """
 
 # Below this many rows an exact scan beats an approximate index, and an
@@ -149,13 +151,16 @@ def _amount_band(amount: float) -> str:
 class CaseStore:
     """Read and write confirmed cases in pgvector."""
 
-    def __init__(self, connection: Any, embedder: Embedder) -> None:
+    def __init__(self, connection: Any, embedder: Embedder, table: str = DEFAULT_TABLE) -> None:
         self._connection = connection
         self._embedder = embedder
+        self.table = table
 
     def create_schema(self) -> None:
         with self._connection.cursor() as cursor:
-            cursor.execute(SCHEMA)
+            cursor.execute(
+                SCHEMA_TEMPLATE.format(table=self.table, dimensions=EMBEDDING_DIMENSIONS)
+            )
         self._connection.commit()
 
     def ensure_index(self, min_rows: int = MIN_ROWS_FOR_INDEX) -> bool:
@@ -178,7 +183,7 @@ class CaseStore:
         lists = max(1, rows // ROWS_PER_LIST)
         with self._connection.cursor() as cursor:
             cursor.execute(
-                f"CREATE INDEX IF NOT EXISTS {TABLE}_embedding_idx ON {TABLE} "
+                f"CREATE INDEX IF NOT EXISTS {self.table}_embedding_idx ON {self.table} "
                 f"USING ivfflat (embedding vector_cosine_ops) WITH (lists = {lists})"
             )
         self._connection.commit()
@@ -211,7 +216,7 @@ class CaseStore:
         with self._connection.cursor() as cursor:
             cursor.executemany(
                 f"""
-                INSERT INTO {TABLE} (
+                INSERT INTO {self.table} (
                     transaction_id, card_token, occurred_at, amount, decision,
                     is_fraud, confirmed_at, resolution, description, facts, embedding
                 )
@@ -247,7 +252,7 @@ class CaseStore:
                 SELECT transaction_id, card_token, occurred_at, amount, decision,
                        is_fraud, confirmed_at, resolution, description, facts,
                        1 - (embedding <=> %s::vector) AS similarity
-                FROM {TABLE}
+                FROM {self.table}
                 WHERE %s::bigint IS NULL OR transaction_id <> %s::bigint
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
@@ -275,7 +280,7 @@ class CaseStore:
 
     def count(self) -> int:
         with self._connection.cursor() as cursor:
-            cursor.execute(f"SELECT count(*) FROM {TABLE}")
+            cursor.execute(f"SELECT count(*) FROM {self.table}")
             return int(cursor.fetchone()[0])
 
 

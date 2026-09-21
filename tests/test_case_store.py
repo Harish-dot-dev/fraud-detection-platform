@@ -34,13 +34,7 @@ def store():
         cursor.execute("DROP TABLE IF EXISTS fraud_cases_test")
     connection.commit()
 
-    import genai.case_store as module
-
-    original = module.TABLE
-    module.TABLE = "fraud_cases_test"
-    module.SCHEMA = module.SCHEMA.replace(original, "fraud_cases_test")
-
-    case_store = CaseStore(connection, HashingEmbedder())
+    case_store = CaseStore(connection, HashingEmbedder(), table="fraud_cases_test")
     case_store.create_schema()
     yield case_store
 
@@ -48,7 +42,6 @@ def store():
         cursor.execute("DROP TABLE IF EXISTS fraud_cases_test")
     connection.commit()
     connection.close()
-    module.TABLE = original
 
 
 def _case(transaction_id: int, amount: float, is_fraud: bool, **features) -> PastCase:

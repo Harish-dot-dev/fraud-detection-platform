@@ -7,7 +7,7 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 8 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
+> **Status: phase 9 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
 > No performance numbers are published yet because none have been measured yet — see
 > [Results](#results).
 
@@ -122,6 +122,13 @@ make warehouse                     # export -> dbt build (7 models, 33 tests) ->
 make airflow                       # or orchestrate all of it: http://localhost:8080
 ```
 
+Then open the analyst app:
+
+```bash
+make app                           # review queue + metrics at http://localhost:8501
+make publish                       # read-only snapshot for dashboards + Power BI exports
+```
+
 Then score payments through the API:
 
 ```bash
@@ -169,7 +176,7 @@ Compose profiles let you run a subset of the stack:
 | `core` | kafka, redis, mlflow, api | ~4.0 GB | `make up` |
 | `ai` | ollama, pgvector | ~4.5 GB | `make up-ai` (adds to core) |
 | `orchestration` | airflow (standalone) | ~3.0 GB | `make airflow` |
-| `dashboard` | superset | phase 9 | — |
+| `dashboard` | superset (optional, unverified) | ~2.0 GB | `make dashboard` |
 
 On a 16 GB laptop, `core` + `ai` is the intended maximum. Every container has an explicit
 `mem_limit` in `docker-compose.yml`.
@@ -245,11 +252,14 @@ More on this, in plain English, in [docs/interview_notes.md](docs/interview_note
 
 ## Screenshots
 
-*Placeholders — to be added once the analyst app and dashboard are built (phase 9).*
+Captured from a live run against real Kafka, Redis, MLflow and pgvector.
 
-| Analyst review queue | Dashboard |
+| Analyst review queue | Metrics dashboard |
 |---|---|
-| _screenshot pending_ | _screenshot pending_ |
+| ![Analyst review queue](docs/screenshots/analyst_queue.png) | ![Metrics dashboard](docs/screenshots/metrics_dashboard.png) |
+
+The queue shows a real flagged payment with its SHAP reasons and a tokenised card identity; the
+dashboard shows 848 scored payments, a 113-deep review queue and a 0.12% false positive rate.
 
 ---
 

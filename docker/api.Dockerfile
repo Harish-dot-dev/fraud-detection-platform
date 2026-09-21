@@ -25,7 +25,7 @@ COPY pyproject.toml README.md ./
 RUN mkdir -p features serving producer streaming training genai eval \
     && touch features/__init__.py serving/__init__.py producer/__init__.py \
        streaming/__init__.py training/__init__.py genai/__init__.py eval/__init__.py \
-    && pip install --no-cache-dir ".[ml]"
+    && pip install --no-cache-dir ".[ml,app]" "psycopg[binary]==3.2.3" "pgvector==0.3.6"
 
 COPY . .
 

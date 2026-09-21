@@ -663,6 +663,77 @@ rediscovered later.
 
 ---
 
+## Phase 9 — Analyst app and dashboard
+
+### The analyst's screen answers questions in the order they are asked
+
+What was decided and why; what the payment looked like; what the model reacted to; what similar
+confirmed cases turned out to be; then two buttons. A reviewer has a queue to get through and has
+to be able to justify the decision afterwards.
+
+The LLM summary is generated **on demand**, when a case is opened — not for every payment in the
+queue. Generation takes seconds; an analyst opens a handful of cases a minute. And if the summary
+cannot be grounded, it is not shown at all: the facts and the SHAP reasons stand on their own.
+
+### The feedback loop closes in minutes, not weeks
+
+When an analyst resolves a case it is written into the pgvector store as a **confirmed** case, so
+the next analyst looking at something similar sees it. A chargeback takes weeks; an analyst's
+judgement takes minutes. Both are real outcomes, and the store records `resolution` so nobody
+mistakes one for the other.
+
+Reviews live in Postgres rather than the DuckDB warehouse for two reasons: the warehouse is rebuilt
+from scratch by the daily batch, so anything written there would be destroyed on the next run; and
+DuckDB takes a single writer, which an interactive app should never hold.
+
+If the case store is unreachable the review is still saved. The analyst's decision is the thing
+that must never be dropped.
+
+### Dashboards read a copy, and that is what makes Superset viable
+
+DuckDB allows one writing process and takes a file lock, so a BI tool holding a connection while
+dbt rebuilds produces either a locked warehouse or a failed run. That is the usual reason "Superset
+over DuckDB" is called fragile.
+
+`make publish` snapshots the warehouse (written beside, then renamed, so a reader never sees a
+half-written file) and exports Parquet for Power BI, which reads it natively with no driver. The
+live file stays with the jobs that write it.
+
+**Superset itself is unverified** — the environment this was built in blocks Docker Hub image
+layers, so the image could never be pulled. It is documented as the one component most likely to
+need a fix on first run, and the Streamlit metrics page covers the same ground.
+
+### Chart choices, and the three defects that only appeared on screen
+
+Colour is assigned by the job it does: the **status palette** (green / amber / red) for allow /
+review / block, because an analyst reads "red" as "we stopped it" without consulting a legend, and
+**validated categorical slots 1–3** for everything else — money, latency, precision/recall. The
+categorical trio passes every check as a set (worst adjacent colour-vision-deficient separation
+9.2, normal-vision 27.6). One slot sits below 3:1 contrast on a light surface, so every chart using
+it also offers the underlying table.
+
+No chart has two y-axes. Two measures of different scale get two charts.
+
+Rendering the page in a browser and looking at it found three things no unit test would have:
+
+1. **Every chart was titled "undefined".** Passing `title=None` to Plotly leaves a title object
+   whose text is undefined, and it renders the literal string. The title is now only set when
+   there is one.
+2. **A single day of data drew one lonely dot** on a time axis spanning two milliseconds either
+   side of it. Early in a run that is exactly the situation, so a single period is now drawn as
+   grouped bars on a category axis.
+3. **Clicking a verdict appeared to do nothing.** `st.rerun()` wipes anything written before it, so
+   the confirmation was rendered and immediately destroyed. It is now stashed in session state and
+   shown at the top of the next run.
+
+There was a fourth, caught the moment the page was first opened in a browser rather than merely
+health-checked: `ModuleNotFoundError: No module named 'analyst_app'`. Streamlit puts the script's
+own directory on `sys.path`, not the repository root, and the package had never been added to the
+project's package list. A 200 from `/_stcore/health` says the server started, not that the page
+renders.
+
+---
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.

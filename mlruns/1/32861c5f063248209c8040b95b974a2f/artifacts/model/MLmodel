@@ -1,0 +1,64 @@
+artifact_path: model
+flavors:
+  python_function:
+    data: model.xgb
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.11.15
+  xgboost:
+    code: null
+    data: model.xgb
+    model_class: xgboost.sklearn.XGBClassifier
+    model_format: xgb
+    xgb_version: 2.1.2
+mlflow_version: 2.17.2
+model_size_bytes: 98812
+model_uuid: 43cf97dc68b749478dac9da3d6c87414
+run_id: 32861c5f063248209c8040b95b974a2f
+signature:
+  inputs: '[{"type": "double", "name": "amount", "required": true}, {"type": "double",
+    "name": "amount_log", "required": true}, {"type": "double", "name": "hour_of_day",
+    "required": true}, {"type": "double", "name": "day_of_week", "required": true},
+    {"type": "double", "name": "is_night", "required": true}, {"type": "double", "name":
+    "has_identity", "required": true}, {"type": "double", "name": "card_txn_count_10m",
+    "required": true}, {"type": "double", "name": "card_txn_count_1h", "required":
+    true}, {"type": "double", "name": "card_txn_count_24h", "required": true}, {"type":
+    "double", "name": "card_amount_sum_24h", "required": true}, {"type": "double",
+    "name": "seconds_since_card_last_txn", "required": true}, {"type": "double", "name":
+    "card_amount_avg_lifetime", "required": true}, {"type": "double", "name": "amount_to_card_avg_ratio",
+    "required": true}, {"type": "double", "name": "card_txn_count_lifetime", "required":
+    true}, {"type": "double", "name": "card_is_new", "required": true}, {"type": "double",
+    "name": "card_new_device", "required": true}, {"type": "double", "name": "card_new_email_domain",
+    "required": true}, {"type": "double", "name": "card_distinct_devices", "required":
+    true}, {"type": "double", "name": "card3", "required": true}, {"type": "double",
+    "name": "card5", "required": true}, {"type": "double", "name": "dist1", "required":
+    true}, {"type": "double", "name": "dist2", "required": true}, {"type": "double",
+    "name": "C1", "required": true}, {"type": "double", "name": "C2", "required":
+    true}, {"type": "double", "name": "C3", "required": true}, {"type": "double",
+    "name": "C4", "required": true}, {"type": "double", "name": "C5", "required":
+    true}, {"type": "double", "name": "C6", "required": true}, {"type": "double",
+    "name": "C7", "required": true}, {"type": "double", "name": "C8", "required":
+    true}, {"type": "double", "name": "C9", "required": true}, {"type": "double",
+    "name": "C10", "required": true}, {"type": "double", "name": "C11", "required":
+    true}, {"type": "double", "name": "C12", "required": true}, {"type": "double",
+    "name": "C13", "required": true}, {"type": "double", "name": "C14", "required":
+    true}, {"type": "double", "name": "D1", "required": true}, {"type": "double",
+    "name": "D2", "required": true}, {"type": "double", "name": "D3", "required":
+    true}, {"type": "double", "name": "D4", "required": true}, {"type": "double",
+    "name": "D5", "required": true}, {"type": "double", "name": "D6", "required":
+    true}, {"type": "double", "name": "D7", "required": true}, {"type": "double",
+    "name": "D8", "required": true}, {"type": "double", "name": "D9", "required":
+    true}, {"type": "double", "name": "D10", "required": true}, {"type": "double",
+    "name": "D11", "required": true}, {"type": "double", "name": "D12", "required":
+    true}, {"type": "double", "name": "D13", "required": true}, {"type": "double",
+    "name": "D14", "required": true}, {"type": "double", "name": "D15", "required":
+    true}, {"type": "double", "name": "product_cd", "required": true}, {"type": "double",
+    "name": "card4", "required": true}, {"type": "double", "name": "card6", "required":
+    true}, {"type": "double", "name": "device_type", "required": true}, {"type": "double",
+    "name": "p_emaildomain", "required": true}, {"type": "double", "name": "r_emaildomain",
+    "required": true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float64", "shape": [-1]}}]'
+  params: null
+utc_time_created: '2026-09-20 13:37:24.152492'

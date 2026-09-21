@@ -39,7 +39,12 @@ def test_every_setting_is_documented_in_env_example() -> None:
 def test_env_example_has_no_unused_keys() -> None:
     """And nothing in .env.example should be dead configuration."""
     # Compose-only variables that are read by docker-compose.yml, not by Python.
-    compose_only = {"kafka_bootstrap_servers_host"}
+    compose_only = {
+        "kafka_bootstrap_servers_host",
+        "superset_admin",
+        "superset_password",
+        "superset_secret_key",
+    }
     unused = _env_example_keys() - set(Settings.model_fields) - compose_only
 
     assert not unused, f"in .env.example but not in Settings: {sorted(unused)}"

@@ -16,7 +16,7 @@ COMPOSE := docker compose
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      silver gold quality features labels dataset train consume load-test demo-api \
 	      export dbt drift decisions-sink warehouse airflow airflow-logs \
-	      load-cases llm-eval \
+	      load-cases llm-eval app publish dashboard \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -171,6 +171,16 @@ load-cases: ## Embed confirmed past cases into pgvector for retrieval
 llm-eval: ## Evaluate the analyst assistant -> reports/llm_eval.json
 	$(PY) -m eval.llm_eval $(ARGS)
 
+app: ## Run the analyst review queue and metrics page
+	$(PY) -m streamlit run analyst_app/app.py --server.port 8501
+
+publish: ## Snapshot the warehouse read-only and export Parquet for Power BI
+	$(PY) -m warehouse.publish
+
+dashboard: publish ## Start Superset against the read-only snapshot (optional, unverified)
+	$(COMPOSE) --profile dashboard up -d
+	@echo "Superset: http://localhost:8088 - see dashboard/superset/README.md"
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -185,7 +195,5 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 	@echo "Removed generated data. data/raw was left untouched."
 
 # ---------------------------------------------------------------------------
-# Targets below arrive with their phase:
-#   app / dashboard    (phase 9)
-#   metrics            (phase 10)  regenerate every reports/*.json
+# `make metrics` (phase 10) will regenerate every reports/*.json in one go.
 # ---------------------------------------------------------------------------

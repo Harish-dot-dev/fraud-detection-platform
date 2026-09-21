@@ -19,8 +19,8 @@ component by component and is filled in as each phase lands.
 | Airflow DAGs (`airflow/dags/`) | 7 | done (both DAGs run green end to end) |
 | dbt models (`dbt/`) | 7 | done (7 models, 33 tests) |
 | GenAI assistant (`genai/`) | 8 | done (pgvector retrieval, grounded summaries, eval harness) |
-| Analyst app (`analyst_app/`) | 9 | not started |
-| Dashboard (`dashboard/`) | 9 | not started |
+| Analyst app (`analyst_app/`) | 9 | done (queue, assistant, feedback loop) |
+| Dashboard (`dashboard/`) | 9 | Streamlit metrics page done; Superset documented, unverified |
 
 ## Data flow in one paragraph
 

@@ -90,6 +90,8 @@ dev = [
 # The repository is organised as top-level component packages rather than a
 # single src/ package, so that each pipeline stage is obvious from the tree.
 packages = [
+    "analyst_app",
+    "analyst_app.pages",
     "common",
     "features",
     "serving",
@@ -97,6 +99,7 @@ packages = [
     "streaming",
     "training",
     "warehouse",
+    "quality",
     "genai",
     "eval",
 ]

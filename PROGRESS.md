@@ -13,8 +13,76 @@ phase.
 | 6. Serving | ✅ done |
 | 7. Orchestration and analytics | ✅ done |
 | 8. GenAI assistant | ✅ done (except the model calls) |
-| 9. Analyst app and dashboard | ⬜ not started |
+| 9. Analyst app and dashboard | ✅ done (Superset unverified) |
 | 10. Polish | ⬜ not started |
+
+---
+
+## Phase 9 — Analyst app and dashboard ✅
+
+### What is in place
+
+- **`analyst_app/app.py`** (`make app`) — the review queue: decision and why, payment detail, SHAP
+  reasons, similar confirmed cases, an on-demand LLM summary, and two verdict buttons.
+- **`analyst_app/reviews.py`** — analyst decisions in Postgres, and the **feedback loop**: a
+  resolved case becomes a confirmed case in pgvector, marked `analyst_review` so it is never
+  mistaken for a settled chargeback.
+- **`analyst_app/pages/1_Metrics.py`** — the metrics dashboard: stat tiles, decision mix, fraud
+  value caught vs missed, precision/recall per model version, latency percentiles, rule hit rates.
+- **`analyst_app/theme.py`** — status palette for decisions, validated categorical slots for
+  everything else, one y-axis, a table under every chart.
+- **`warehouse/publish.py`** (`make publish`) — a read-only warehouse snapshot for dashboards and
+  Parquet exports for Power BI.
+- **`dashboard/superset/README.md`** + a `dashboard` Compose profile.
+
+### How to run it
+
+```bash
+make app           # review queue + metrics at http://localhost:8501
+make publish       # read-only snapshot + Power BI exports
+make dashboard     # Superset (optional, unverified)
+```
+
+### Verified
+
+Run on 2026-09-20 against the live stack, **driven in a real browser** (Chromium via Playwright),
+not just health-checked:
+
+- Both pages render with **no exceptions**; the metrics page draws **5 charts**.
+- The queue showed **100 real flagged payments** with genuine SHAP reasons — e.g. payment 2987794,
+  review, score 0.2607, `C4 = 3.0 (+1.056)`, `amount = 203.982 (+0.948)`,
+  `p_emaildomain = yahoo.com (+0.652)` — and a truncated card token, no PII.
+- Metrics page: 848 payments scored, 113 in the review queue, 26 blocked, 13,707 fraud value
+  caught, 63 missed, 0.12% false positive rate.
+- **The feedback loop was exercised by clicking the buttons.** Confirmed in Postgres afterwards:
+  `analyst_reviews` holds `2987794 | fraud` and `2987780 | legitimate`, and `fraud_cases` holds
+  `2987794 | t | analyst_review` — now retrievable by the next analyst.
+- `make publish` produced a 1.6 MB read-only snapshot and 4 Parquet exports.
+- Fast suite **248 passed**; Spark **54**; pgvector **12**; ruff clean.
+
+Screenshots in `docs/screenshots/`, captured from these runs.
+
+### Four defects found by opening the page rather than health-checking it
+
+1. **`ModuleNotFoundError: No module named 'analyst_app'`** — Streamlit puts the script's directory
+   on `sys.path`, not the repo root, and the package was missing from the project's package list.
+   A 200 from `/_stcore/health` says the server started, not that the page renders.
+2. **Every chart titled "undefined"** — passing `title=None` to Plotly leaves a title object with
+   undefined text, which it renders literally.
+3. **One day of data drew a lone dot** on a time axis spanning two milliseconds. A single period is
+   now grouped bars on a category axis.
+4. **Clicking a verdict appeared to do nothing** — `st.rerun()` wiped the confirmation. It is now
+   stashed in session state and rendered on the next run.
+
+A fifth, found while fixing the tests: both stores took their table name from a module global, and
+the test fixture's patch-and-restore corrupted the schema string between cases. The table is now a
+constructor argument, so a test points a store at its own table without touching module state.
+
+### Not verified (needs your laptop)
+
+- **Superset.** Its image could never be pulled here. `dashboard/superset/README.md` says so
+  plainly and is the most likely thing in the repository to need a fix on first run.
+- The analyst app *inside its container* — the code is the same, the image is not built here.
 
 ---
 
