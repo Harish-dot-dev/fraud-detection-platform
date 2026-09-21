@@ -98,3 +98,63 @@ def make_event():
         )
 
     return _make
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests whose infrastructure or optional dependency is absent.
+
+    Marker expressions alone are fragile: `make test` and CI each carried
+    their own hand-written list of markers to exclude, and when
+    `needs_pgvector` was added the CI list was not updated - so the fast job
+    collected the case-store tests and died on a missing psycopg driver.
+
+    Checking availability here means the suite adapts to the machine it is on:
+    a laptop with no Postgres skips those tests with a readable reason instead
+    of erroring, and the dedicated CI jobs - which do provide the service -
+    still run them for real.
+    """
+    import importlib.util
+    import os
+
+    import pytest as _pytest
+
+    def _module_available(name: str) -> bool:
+        return importlib.util.find_spec(name) is not None
+
+    def _pgvector_available() -> bool:
+        if not _module_available("psycopg"):
+            return False
+        try:
+            import psycopg
+
+            with psycopg.connect(
+                host=os.environ.get("PGVECTOR_HOST", "localhost"),
+                port=int(os.environ.get("PGVECTOR_PORT", "5432")),
+                dbname=os.environ.get("PGVECTOR_DB", "fraud_cases"),
+                user=os.environ.get("PGVECTOR_USER", "fraud"),
+                password=os.environ.get("PGVECTOR_PASSWORD", "fraud_local_dev_only"),
+                connect_timeout=3,
+            ):
+                return True
+        except Exception:
+            return False
+
+    requirements = {
+        "needs_spark": (lambda: _module_available("pyspark"), "pyspark is not installed"),
+        "needs_dbt": (lambda: _module_available("dbt"), "dbt is not installed"),
+        "needs_pgvector": (_pgvector_available, "no Postgres with pgvector is reachable"),
+        "needs_ollama": (
+            lambda: os.environ.get("OLLAMA_AVAILABLE") == "1",
+            "set OLLAMA_AVAILABLE=1 when an Ollama server is running",
+        ),
+    }
+
+    cache: dict[str, bool] = {}
+    for item in items:
+        for marker, (available, reason) in requirements.items():
+            if marker not in item.keywords:
+                continue
+            if marker not in cache:
+                cache[marker] = available()
+            if not cache[marker]:
+                item.add_marker(_pytest.mark.skip(reason=f"skipped: {reason}"))

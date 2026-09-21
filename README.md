@@ -7,9 +7,9 @@ LLM writes a grounded case summary using retrieval over past confirmed cases. De
 labels feed scheduled retraining, drift monitoring and dashboards. Everything runs locally, for
 free, with `docker compose up`.
 
-> **Status: phase 9 of 10 complete.** See [PROGRESS.md](PROGRESS.md) for exactly what works today.
-> No performance numbers are published yet because none have been measured yet — see
-> [Results](#results).
+> **Status: all 10 phases complete.** [PROGRESS.md](PROGRESS.md) records exactly what has been
+> run, what it produced, and what has not been verified. The results table below is *generated*
+> from measurement files — rows that say *not yet measured* have not been measured.
 
 ---
 
@@ -73,6 +73,8 @@ flowchart LR
 
 Full walkthrough: [docs/architecture.md](docs/architecture.md).
 Why each piece was chosen: [docs/design_decisions.md](docs/design_decisions.md).
+The concepts in plain English, with likely interview questions:
+[docs/interview_notes.md](docs/interview_notes.md).
 
 ---
 
@@ -185,22 +187,32 @@ On a 16 GB laptop, `core` + `ai` is the intended maximum. Every container has an
 
 ## Results
 
-**Nothing here is filled in from an estimate.** Every number in this table comes from a script that
-writes a JSON file into `reports/`, and the table is populated from those files. Where a row says
-*not yet measured*, the phase that produces it has not been built or has not been run against the
-real dataset.
+**Nothing here is filled in from an estimate.** This table is *generated* from the JSON files in
+`reports/` by `make readme-metrics` — if a run has not produced a number, the row says *not yet
+measured* rather than carrying one from memory. Each row names the command that produces it, and
+the conditions it was measured under where those matter.
 
-| Metric | Value | Source |
+To fill it in with your own data: `make metrics`.
+
+<!-- METRICS:START -->
+
+| Metric | Value | Produced by |
 |---|---|---|
-| PR-AUC (test window) | *not yet measured* | `make train` → `reports/metrics.json` |
-| Precision @ block threshold | *not yet measured* | `make train` → `reports/metrics.json` |
-| Recall @ block threshold | *not yet measured* | `make train` → `reports/metrics.json` |
-| Fraud value caught vs missed | *not yet measured* | `make train` → `reports/metrics.json` |
-| False positive rate | *not yet measured* | `make train` → `reports/metrics.json` |
-| Chosen thresholds + cost rationale | *not yet measured* | `make train` → `reports/thresholds.json` |
-| `/score` p50 / p95 / p99 latency | 12.7 / 20.3 / 21.4 ms *(native services, not containers — see PROGRESS.md)* | `make load-test` → `reports/latency.json` |
-| LLM factual accuracy / schema validity | *not yet measured — needs Ollama* | `make llm-eval` → `reports/llm_eval.json` |
-| Retrieval quality (label match) | *not yet measured — needs the real embedder* | `make llm-eval` → `reports/llm_eval.json` |
+| PR-AUC (test window) | *not yet measured on the real dataset* | `make train` |
+| Precision at the block threshold | *not yet measured on the real dataset* | `make train` |
+| Recall at the block threshold | *not yet measured on the real dataset* | `make train` |
+| Recall including the review queue | *not yet measured on the real dataset* | `make train` |
+| False positive rate | *not yet measured on the real dataset* | `make train` |
+| Fraud value caught vs missed (test window) | *not yet measured on the real dataset* | `make train` |
+| Chosen thresholds (cost-tuned) | *not yet measured on the real dataset* | `make train` |
+| /score latency p50 / p95 / p99 | 12.7 / 20.3 / 21.4 ms at concurrency 1, peak 71 req/s | `make load-test` — native services (real Redis, real MLflow champion, Kafka decision sink) |
+| LLM factual accuracy | *not yet measured — needs a local LLM* | `make llm-eval` |
+| LLM schema validity | *not yet measured — needs a local LLM* | `make llm-eval` |
+| Retrieval quality (same confirmed outcome) | *not yet measured — needs the real embedder* | `make llm-eval` |
+| LLM latency per summary (p50) | *not yet measured — needs a local LLM* | `make llm-eval` |
+| Feature drift, recent vs reference window | 12/18 features (66.7%) | `make drift` |
+
+<!-- METRICS:END -->
 
 The "under 100 ms" scoring target is a **goal**, not a claim. The measured number will be published
 here once `make load-test` has been run against the full stack, whatever it turns out to be.
@@ -263,12 +275,46 @@ dashboard shows 848 scored payments, a 113-deep review queue and a 0.12% false p
 
 ---
 
-## Limitations
+## Design decisions
 
-Tracked honestly in [docs/design_decisions.md](docs/design_decisions.md); the short version is that
-this is a laptop-scale simulation of a production system. The dataset has no real card identifier
-(a proxy is used), transaction time is synthetic, and the local 3B LLM is far weaker than what a
-real fraud team would deploy.
+The reasoning behind every choice is in [docs/design_decisions.md](docs/design_decisions.md),
+written as it was made. The ones worth knowing before reading the code:
+
+- **Rules run before the model**, because a confirmed-compromised card or a policy limit is not a
+  prediction — and an analyst can add a rule this afternoon rather than waiting for a retrain.
+- **Redis stores card *state*, not features.** A 10-minute velocity count includes the payment
+  being scored, and that payment does not exist until the request arrives.
+- **Every feature is defined once** and computed two ways — folded per payment online, as window
+  functions offline — with a test asserting all 18 agree to 1e-6. That is the defence against
+  training/serving skew.
+- **Labels arrive 7–60 days late**, and the training set only uses labels that had arrived by the
+  training date. Thirty days after the fact, *everything you know is fraud*.
+- **Thresholds are chosen by cost**, not by F1, and tuned on validation rather than on test.
+- **The LLM never computes a number.** It writes prose around facts the pipeline computed, and any
+  summary that cannot be grounded is withheld entirely.
+- **A human makes the final call.** The model's job is to decide what deserves one.
+
+## Limitations, honestly
+
+This is a laptop-scale simulation, and several things in it are approximations:
+
+- **The card identity is a proxy** (`card1 + addr1 + P_emaildomain`). Real cards have real
+  identifiers; this one merges households and splits cardholders who move.
+- **Transaction time is synthetic.** `TransactionDT` is a seconds offset mapped onto a fixed
+  reference date — the intervals are real, the calendar is invented.
+- **Chargebacks are simulated**, not observed. The delay distribution is a plausible guess.
+- **The review band assumes analysts are always right**, so it looks slightly cheaper than reality.
+- **No model here has been trained on the real dataset yet**, which is why the results table says
+  so rather than showing you a synthetic number.
+- **`docker compose` itself is unverified** — see PROGRESS.md for what was run instead, and why.
+
+### What I would do differently in production
+
+Flink rather than Spark micro-batches for genuinely per-event latency; a managed feature store
+instead of Redis plus my own consistency test; multiple API workers, since the throughput ceiling
+here is one Python process; a real analyst-labelling workflow instead of simulated chargebacks; and
+a considerably stronger model behind the assistant — with the same grounding checks kept exactly as
+they are, because those are what make its output safe rather than the model's size.
 
 ## Licence
 

@@ -71,6 +71,11 @@ class ModelMetrics:
     expected_cost: float
     baseline_cost: float
     cost_model: dict[str, float] = field(default_factory=dict)
+    # Which data produced this. Model quality is entirely data-dependent, so a
+    # number measured on the synthetic fixture must never be mistaken for a
+    # result - the README generator reads this field and refuses to publish
+    # fixture numbers as headline metrics.
+    dataset: str = "unknown"
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -14,7 +14,54 @@ phase.
 | 7. Orchestration and analytics | ✅ done |
 | 8. GenAI assistant | ✅ done (except the model calls) |
 | 9. Analyst app and dashboard | ✅ done (Superset unverified) |
-| 10. Polish | ⬜ not started |
+| 10. Polish | ✅ done |
+
+---
+
+## Phase 10 — Polish ✅
+
+### What is in place
+
+- **`docs/interview_notes.md`** — precision vs recall, why accuracy is useless here, leakage and
+  point-in-time correctness, online vs offline features, SHAP, the RAG retrieval, how the LLM is
+  kept grounded, threshold trade-offs, and ten likely interview questions answered from this code.
+- **`scripts/readme_metrics.py`** (`make readme-metrics`) — the README results table is now
+  *generated* from `reports/*.json`. It cannot carry a number a run did not produce.
+- **`make metrics`** — runs every measurement and refreshes the table.
+- Full README pass: design decisions, honest limitations, and what production would do differently.
+
+### The honesty rule, made structural
+
+`metrics.json` now records which dataset produced it, and the table generator **withholds**
+model-quality rows unless the run used the real IEEE-CIS data — rather than printing a synthetic
+PR-AUC with a footnote. The same applies to the assistant: a scripted generator or the stub
+embedder means those rows read *not yet measured*, because "100.0%" beside a caveat is still read
+as 100%.
+
+Current state of the table: **2 of 13 metrics measured** — the two that are genuine measurements of
+the system rather than of the data (scoring latency and feature drift). Everything else names the
+command that would fill it in.
+
+`tests/test_readme_metrics.py` tests that rule directly, including that a real dataset and a real
+generator *are* published.
+
+### CI, and the failure I had not checked
+
+**Phase 8's CI run failed and I had not looked.** The fast-test job's marker expression excluded
+`needs_spark` and `needs_ollama` but not `needs_pgvector`, which had been added that same phase, so
+the job collected the case-store tests and errored on a missing psycopg driver. `make test` had the
+same gap, so it would have failed on your laptop too.
+
+Fixed in two ways: the marker lists are corrected, and `tests/conftest.py` now **skips tests whose
+infrastructure is genuinely absent** rather than erroring. A laptop with no Postgres skips those
+twelve tests with a readable reason; the dedicated CI job, which provides the service, still runs
+them for real. Verified in both directions — 12 passed with Postgres up, 12 skipped with it down.
+
+### Verified
+
+- Fast suite **260 passed** (248 + 12 pgvector when the service is up), Spark **54**, ruff clean.
+- `make readme-metrics` regenerates the table from the report files.
+- Git remote updated to the renamed repository.
 
 ---
 

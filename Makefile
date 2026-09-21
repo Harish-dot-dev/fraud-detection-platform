@@ -16,7 +16,7 @@ COMPOSE := docker compose
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      silver gold quality features labels dataset train consume load-test demo-api \
 	      export dbt drift decisions-sink warehouse airflow airflow-logs \
-	      load-cases llm-eval app publish dashboard \
+	      load-cases llm-eval app publish dashboard readme-metrics metrics \
 	      clean clean-data ollama-pull
 
 help: ## Show this help
@@ -57,7 +57,7 @@ fmt: ## Auto-fix lint issues and format the code
 	$(VENV)/bin/ruff check --fix .
 
 test: ## Run the fast test suite (no Spark, no Ollama, no Docker needed)
-	$(VENV)/bin/pytest -m "not slow and not needs_spark and not needs_ollama"
+	$(VENV)/bin/pytest -m "not slow and not needs_spark and not needs_ollama and not needs_pgvector"
 
 test-all: ## Run every test, including the slow and infrastructure-dependent ones
 	$(VENV)/bin/pytest
@@ -181,6 +181,17 @@ dashboard: publish ## Start Superset against the read-only snapshot (optional, u
 	$(COMPOSE) --profile dashboard up -d
 	@echo "Superset: http://localhost:8088 - see dashboard/superset/README.md"
 
+readme-metrics: ## Regenerate the README results table from reports/*.json
+	$(PY) scripts/readme_metrics.py
+
+metrics: ## Run every measurement and refresh the README table
+	@echo "== quality =="      && $(MAKE) quality
+	@echo "== train =="        && $(MAKE) train
+	@echo "== drift =="        && $(MAKE) drift
+	@echo "== load test =="    && $(PY) scripts/load_test.py --api-url http://localhost:8000
+	@echo "== llm eval =="     && $(PY) -m eval.llm_eval
+	@$(MAKE) readme-metrics
+
 bronze-peek: ## Show the last few rows landed in the Bronze Delta table
 	$(COMPOSE) run --rm spark python -m streaming.inspect_bronze
 
@@ -194,6 +205,3 @@ clean-data: ## Delete generated data (Delta tables, DuckDB, MLflow) - NOT data/r
 	rm -rf data/delta data/warehouse data/mlflow
 	@echo "Removed generated data. data/raw was left untouched."
 
-# ---------------------------------------------------------------------------
-# `make metrics` (phase 10) will regenerate every reports/*.json in one go.
-# ---------------------------------------------------------------------------

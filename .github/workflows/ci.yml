@@ -54,7 +54,7 @@ jobs:
           pip install -e ".[ml,dev,dbt]"
 
       - name: Run the fast test suite
-        run: pytest -m "not slow and not needs_spark and not needs_ollama" --cov=. --cov-report=term-missing
+        run: pytest -m "not slow and not needs_spark and not needs_ollama and not needs_pgvector" --cov=. --cov-report=term-missing
 
       - name: Check the committed fixture is up to date
         # Regenerating with the documented arguments must produce no diff.

@@ -319,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(result.describe())
 
+    # Record the provenance of the numbers alongside them.
+    from producer.replay import resolve_source_paths
+
+    _, _, is_real_data = resolve_source_paths()
+    result.test_metrics.dataset = "IEEE-CIS (real)" if is_real_data else "synthetic fixture"
+
     report_dir = Path(args.report_dir)
     metrics_path = result.test_metrics.save(report_dir / "metrics.json")
     thresholds_path = result.thresholds.save(report_dir / "thresholds.json")
