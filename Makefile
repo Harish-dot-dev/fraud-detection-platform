@@ -12,12 +12,12 @@ PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 COMPOSE := docker compose
 
-.PHONY: help env install lint fmt test test-all sample data up up-ai down ps logs \
+.PHONY: help env install lint fmt test test-all sample data up up-ai up-ai-hosted down ps logs \
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      silver gold quality features labels dataset train consume load-test demo-api \
 	      export dbt drift decisions-sink warehouse airflow airflow-logs \
 	      load-cases llm-eval app publish dashboard readme-metrics metrics \
-	      clean clean-data ollama-pull
+	      clean clean-data ollama-pull llm-check
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "; printf "\nFraud detection platform\n\nUsage: make <target>\n\n"} \
@@ -81,6 +81,9 @@ up: ## Start the core stack (kafka, redis, mlflow, api)
 up-ai: ## Start core + the GenAI services (ollama, pgvector)
 	$(COMPOSE) --profile core --profile ai up -d --build
 
+up-ai-hosted: ## Start core + pgvector only (for LLM_PROVIDER=azure_openai)
+	$(COMPOSE) --profile core --profile hosted up -d --build
+
 down: ## Stop all containers (named volumes are kept)
 	$(COMPOSE) --profile core --profile ai --profile orchestration --profile dashboard down
 
@@ -92,6 +95,9 @@ logs: ## Tail logs from all running containers
 
 ollama-pull: ## Download the local LLM into the ollama volume (run once)
 	$(COMPOSE) exec ollama ollama pull $${OLLAMA_MODEL:-llama3.2:3b}
+
+llm-check: ## Verify the configured LLM + embedding providers answer (cheap)
+	$(PY) -m scripts.llm_check $(ARGS)
 
 ##@ Pipeline
 

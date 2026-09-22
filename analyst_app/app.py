@@ -43,9 +43,7 @@ def _review_store() -> ReviewStore | None:
         )
         case_store = None
         try:
-            case_store = CaseStore(
-                connection, build_embedder(settings.embedding_model, allow_stub=True)
-            )
+            case_store = CaseStore(connection, build_embedder(settings, allow_stub=True))
             case_store.create_schema()
         except Exception:  # noqa: BLE001 - reviews still work without retrieval
             pass
@@ -128,7 +126,7 @@ def _render_assistant(case: dict, features: dict, transaction_id: int) -> None:
             from genai.case_store import CaseStore, connect, describe_case
             from genai.embeddings import build_embedder
             from genai.facts import CaseFacts
-            from genai.summarise import OllamaGenerator, summarise_case
+            from genai.summarise import build_generator, summarise_case
 
             store = CaseStore(
                 connect(
@@ -138,7 +136,7 @@ def _render_assistant(case: dict, features: dict, transaction_id: int) -> None:
                     settings.pgvector_user,
                     settings.pgvector_password,
                 ),
-                build_embedder(settings.embedding_model, allow_stub=True),
+                build_embedder(settings, allow_stub=True),
             )
             similar = store.find_similar(
                 describe_case(float(case["amount"]), case["decision"], features),
@@ -162,9 +160,7 @@ def _render_assistant(case: dict, features: dict, transaction_id: int) -> None:
                 features=features,
                 similar_cases=similar,
             )
-            result = summarise_case(
-                facts, OllamaGenerator(settings.ollama_base_url, settings.ollama_model)
-            )
+            result = summarise_case(facts, build_generator(settings))
         except Exception as error:  # noqa: BLE001
             st.warning(f"The assistant is unavailable ({error}). The facts above stand alone.")
             return

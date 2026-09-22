@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("no confirmed cases in %s - run `make export` first", args.export_dir)
         return 1
 
-    embedder = build_embedder(settings.embedding_model, allow_stub=args.allow_stub_embedder)
+    embedder = build_embedder(settings, allow_stub=args.allow_stub_embedder)
     connection = connect(args.host, args.port, args.database, args.user, args.password)
     store = CaseStore(connection, embedder)
     store.create_schema()

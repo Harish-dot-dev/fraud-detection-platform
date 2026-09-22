@@ -128,6 +128,139 @@ class OllamaGenerator:
         return response.json()["message"]["content"]
 
 
+class AzureOpenAIGenerator:
+    """The hosted generator: a chat deployment on Azure OpenAI.
+
+    Written against the REST API with httpx rather than the ``openai`` SDK, for
+    two reasons. httpx is already a dependency, so the hosted path adds no new
+    package to install or pin; and the class then reads line-for-line beside
+    ``OllamaGenerator`` above, which makes the point that swapping providers is
+    a change of HTTP call and nothing else. The trade is that retries and typed
+    errors are hand-rolled - see ``_post`` below.
+    """
+
+    # Transient failures worth trying again: Azure throttles with 429 when the
+    # deployment's tokens-per-minute quota is exhausted, which on a small
+    # deployment happens with entirely normal traffic.
+    _RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        deployment: str = "gpt-4o-mini",
+        api_version: str = "2024-10-21",
+        timeout: float = 60.0,
+        temperature: float = 0.1,
+        max_retries: int = 2,
+    ) -> None:
+        if not endpoint or not api_key:
+            raise ValueError("Azure OpenAI needs both an endpoint and an API key")
+
+        # Named for the deployment, not the model: two deployments of the same
+        # model can have different quotas and content filters, so the
+        # deployment is what actually identifies a result in reports/.
+        self.name = f"azure/{deployment}"
+        self._url = (
+            f"{endpoint.rstrip('/')}/openai/deployments/{deployment}"
+            f"/chat/completions?api-version={api_version}"
+        )
+        self._api_key = api_key
+        self._timeout = timeout
+        self._temperature = temperature
+        self._max_retries = max_retries
+
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST with a bounded retry on the transient statuses."""
+        import httpx
+
+        last_error: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = httpx.post(
+                    self._url,
+                    # Azure authenticates with its own header, not Bearer.
+                    headers={"api-key": self._api_key, "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self._timeout,
+                )
+            except httpx.RequestError as error:  # network-level, always worth a retry
+                last_error = error
+            else:
+                if response.status_code not in self._RETRY_STATUSES:
+                    response.raise_for_status()
+                    return response.json()
+                last_error = httpx.HTTPStatusError(
+                    f"azure returned {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+
+            if attempt < self._max_retries:
+                # Azure tells us how long to wait when it throttles; honouring
+                # it is the difference between backing off and hammering.
+                delay = _retry_after_seconds(last_error, default=2.0 * (attempt + 1))
+                logger.info("azure call failed (%s); retrying in %.1fs", last_error, delay)
+                time.sleep(delay)
+
+        raise RuntimeError(f"Azure OpenAI request failed after retries: {last_error}")
+
+    def generate(self, messages: list[dict[str, str]]) -> str:
+        body = self._post(
+            {
+                "messages": messages,
+                "temperature": self._temperature,
+                # The server-side equivalent of Ollama's "format": "json".
+                # It requires the word JSON to appear in the prompt, which
+                # genai/prompts.py satisfies - a test pins that so an innocent
+                # prompt reword cannot start returning prose.
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+        choice = (body.get("choices") or [{}])[0]
+        # A content filter returns a 200 with no content, which would otherwise
+        # surface as a confusing JSON parse error several frames away. Fraud
+        # case text is exactly the kind of thing a filter reacts to, so it is
+        # named explicitly and left to summarise_case to degrade gracefully.
+        if choice.get("finish_reason") == "content_filter":
+            raise RuntimeError("Azure OpenAI content filter blocked the response")
+
+        content = (choice.get("message") or {}).get("content")
+        if not content:
+            raise RuntimeError(
+                f"Azure OpenAI returned no content (finish_reason={choice.get('finish_reason')})"
+            )
+        return content
+
+
+def _retry_after_seconds(error: Exception | None, default: float) -> float:
+    """Read Azure's Retry-After header, falling back to a fixed backoff."""
+    response = getattr(error, "response", None)
+    try:
+        return max(float(response.headers["retry-after"]), 0.0)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return default
+
+
+def build_generator(settings: Any) -> SummaryGenerator:
+    """Build the configured generator.
+
+    The whole point of the Protocol above: the rest of the codebase - the
+    analyst app, the eval harness - asks for a generator and never learns which
+    one it got. Adding a third provider means adding a branch here and nothing
+    else.
+    """
+    if settings.llm_provider == "azure_openai":
+        return AzureOpenAIGenerator(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key.get_secret_value(),
+            deployment=settings.azure_openai_chat_deployment,
+            api_version=settings.azure_openai_api_version,
+        )
+    return OllamaGenerator(settings.ollama_base_url, settings.ollama_model)
+
+
 class ScriptedGenerator:
     """Returns prepared responses. For tests and for the eval harness offline."""
 

@@ -11,10 +11,15 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The providers the assistant knows how to talk to. Validated at startup so a
+# typo in .env is a clear error rather than a confusing fallback.
+LLM_PROVIDERS = frozenset({"ollama", "azure_openai"})
+EMBEDDING_PROVIDERS = frozenset({"sentence_transformers", "azure_openai"})
 
 
 class Settings(BaseSettings):
@@ -74,10 +79,35 @@ class Settings(BaseSettings):
     cost_false_block: float = 25.0
     cost_review: float = 5.0
 
-    # --- GenAI ---
+    # --- GenAI: which provider serves the assistant ---
+    # The default is local and free, so the repository runs for anyone who
+    # clones it. Azure OpenAI is opt-in because it bills per token and needs a
+    # subscription; see docs/design_decisions.md for why both exist.
+    llm_provider: str = "ollama"
+    embedding_provider: str = "sentence_transformers"
+
+    # --- GenAI: local provider (Ollama + sentence-transformers) ---
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.2:3b"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
+    # --- GenAI: Azure OpenAI ---
+    # Endpoint looks like https://<resource>.openai.azure.com - no trailing path.
+    azure_openai_endpoint: str = ""
+    # SecretStr so the key cannot leak through a settings repr in a log line or
+    # a Streamlit exception traceback. Read it with .get_secret_value().
+    azure_openai_api_key: SecretStr = SecretStr("")
+    # Pinned to a GA version rather than a preview: preview versions are removed
+    # on a schedule, and a portfolio project that stops working is worse than
+    # one using a slightly older API.
+    azure_openai_api_version: str = "2024-10-21"
+    # These are Azure *deployment* names, which you choose in the portal. They
+    # often differ from the underlying model name, which is the single most
+    # common cause of a 404 from Azure OpenAI.
+    azure_openai_chat_deployment: str = "gpt-4o-mini"
+    azure_openai_embedding_deployment: str = "text-embedding-3-small"
+
+    # --- GenAI: past-case store ---
     pgvector_host: str = "pgvector"
     pgvector_port: int = 5432
     pgvector_db: str = "fraud_cases"
@@ -92,6 +122,39 @@ class Settings(BaseSettings):
 
     # --- Reproducibility ---
     random_seed: int = 42
+
+    @model_validator(mode="after")
+    def _check_provider_configuration(self) -> Settings:
+        """Fail at startup rather than at the first analyst request.
+
+        A missing endpoint or key is a configuration mistake, and the place to
+        find out is the moment the process starts - not thirty seconds into a
+        demo when an analyst opens the first flagged payment and the assistant
+        silently falls back to showing no summary.
+        """
+        if self.llm_provider not in LLM_PROVIDERS:
+            raise ValueError(f"LLM_PROVIDER must be one of {sorted(LLM_PROVIDERS)}")
+        if self.embedding_provider not in EMBEDDING_PROVIDERS:
+            raise ValueError(f"EMBEDDING_PROVIDER must be one of {sorted(EMBEDDING_PROVIDERS)}")
+
+        uses_azure = "azure_openai" in {self.llm_provider, self.embedding_provider}
+        if uses_azure:
+            if not self.azure_openai_endpoint:
+                raise ValueError(
+                    "AZURE_OPENAI_ENDPOINT is required when a provider is azure_openai"
+                )
+            if not self.azure_openai_api_key.get_secret_value():
+                raise ValueError("AZURE_OPENAI_API_KEY is required when a provider is azure_openai")
+        return self
+
+    @property
+    def uses_paid_provider(self) -> bool:
+        """True when a run will bill somebody.
+
+        Surfaced in the analyst app and the eval report so a cost is never a
+        surprise, and so a published metric records which provider produced it.
+        """
+        return "azure_openai" in {self.llm_provider, self.embedding_provider}
 
     def path(self, relative: str) -> Path:
         """Resolve a configured relative path against the repository root."""

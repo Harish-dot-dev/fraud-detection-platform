@@ -57,8 +57,17 @@ CREATE TABLE IF NOT EXISTS {table} (
     resolution       TEXT NOT NULL DEFAULT 'chargeback',
     description      TEXT NOT NULL,
     facts            JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-    embedding        vector({dimensions}) NOT NULL
+    embedding        vector({dimensions}) NOT NULL,
+    -- Which embedder produced the vector. Two embedders can agree on the
+    -- number of dimensions and still occupy completely unrelated vector
+    -- spaces, so a table holding both returns neighbours that are not
+    -- neighbours. Stored so retrieval can refuse rather than mislead.
+    embedder         TEXT NOT NULL DEFAULT 'unknown'
 );
+
+-- CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a store built
+-- before the column existed is migrated here rather than silently missing it.
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS embedder TEXT NOT NULL DEFAULT 'unknown';
 
 CREATE INDEX IF NOT EXISTS {table}_occurred_at_idx ON {table} (occurred_at);
 """
@@ -155,6 +164,8 @@ class CaseStore:
         self._connection = connection
         self._embedder = embedder
         self.table = table
+        # Checked once per process rather than per query; see check_embedder.
+        self._embedder_checked = False
 
     def create_schema(self) -> None:
         with self._connection.cursor() as cursor:
@@ -209,6 +220,7 @@ class CaseStore:
                 case.description,
                 json.dumps(case.facts),
                 _to_pgvector(vector),
+                self._embedder.name,
             )
             for case, vector in zip(cases, vectors, strict=True)
         ]
@@ -218,9 +230,10 @@ class CaseStore:
                 f"""
                 INSERT INTO {self.table} (
                     transaction_id, card_token, occurred_at, amount, decision,
-                    is_fraud, confirmed_at, resolution, description, facts, embedding
+                    is_fraud, confirmed_at, resolution, description, facts, embedding,
+                    embedder
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (transaction_id) DO UPDATE SET
                     decision = EXCLUDED.decision,
                     is_fraud = EXCLUDED.is_fraud,
@@ -228,12 +241,45 @@ class CaseStore:
                     resolution = EXCLUDED.resolution,
                     description = EXCLUDED.description,
                     facts = EXCLUDED.facts,
-                    embedding = EXCLUDED.embedding
+                    embedding = EXCLUDED.embedding,
+                    embedder = EXCLUDED.embedder
                 """,
                 rows,
             )
         self._connection.commit()
         return len(rows)
+
+    def stored_embedders(self) -> list[str]:
+        """Which embedders wrote the rows currently in the table."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(f"SELECT DISTINCT embedder FROM {self.table}")
+            return sorted(row[0] for row in cursor.fetchall())
+
+    def check_embedder(self) -> None:
+        """Refuse to search a table written by a different embedder.
+
+        This is the failure mode that switching provider introduces. Both
+        embedders produce 384 unit-length floats, so pgvector accepts the
+        query, the SQL succeeds and cosine similarity returns a number - it is
+        just a number about nothing, because the two vector spaces have no
+        relationship to each other. Nothing about the output looks wrong.
+
+        The rule is therefore mechanical rather than advisory: switching
+        EMBEDDING_PROVIDER means reloading the store with `make load-cases`.
+        """
+        if self._embedder_checked:
+            return
+
+        stored = [name for name in self.stored_embedders() if name != "unknown"]
+        foreign = [name for name in stored if name != self._embedder.name]
+        if foreign:
+            raise RuntimeError(
+                f"{self.table} holds vectors from {foreign} but this store is using "
+                f"{self._embedder.name!r}. Vectors from different embedders are not "
+                f"comparable - reload the case store (`make load-cases`) after "
+                f"changing EMBEDDING_PROVIDER."
+            )
+        self._embedder_checked = True
 
     def find_similar(
         self, description: str, top_k: int = 5, exclude_transaction_id: int | None = None
@@ -244,6 +290,7 @@ class CaseStore:
         perfect, useless neighbour, and during evaluation it would quietly
         turn retrieval quality into 100%.
         """
+        self.check_embedder()
         vector = _to_pgvector(self._embedder.embed([description])[0])
 
         with self._connection.cursor() as cursor:

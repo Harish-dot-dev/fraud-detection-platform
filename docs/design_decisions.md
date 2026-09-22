@@ -734,6 +734,111 @@ renders.
 
 ---
 
+## Provider choice — running the assistant on Azure OpenAI
+
+### Why there are two providers rather than one
+
+The original constraint on this project was that everything must be free and run locally, and
+the assistant was built against Ollama on that basis. Azure OpenAI was added afterwards because
+the interesting question in an interview is not "can you call an LLM API" — everyone can — but
+**what you built around it so that swapping the model is a configuration change**.
+
+The answer was already in place. `SummaryGenerator` and `Embedder` were Protocols from the start,
+each with a real implementation and a deterministic one for tests. Adding a hosted provider meant
+one more class behind each Protocol and a factory to choose between them. Nothing in
+`summarise_case`, the grounding checks, the eval harness or the analyst app knows which provider
+it got.
+
+That is the claim worth making, and it is only worth making because it is true: the local path
+still works, and the default is still local.
+
+### The default stays free
+
+`LLM_PROVIDER=ollama` remains the default. A clone of this repository runs with no Azure
+subscription, no key and no bill. A portfolio project that only works with someone else's paid
+credentials cannot be looked at by the person you want to look at it.
+
+The two providers are also independent settings. A hosted LLM over locally embedded cases is a
+valid — and cheaper — combination, because embeddings are the per-case cost while summaries are
+generated only for the ~3% of payments that get flagged.
+
+### REST over httpx rather than the `openai` SDK
+
+The SDK would give retries, typed errors and less code. It was not used, for two reasons.
+
+httpx is already a dependency, so the hosted path adds no new package to pin, and the local and
+hosted classes then sit side by side in `genai/summarise.py` reading almost identically — which
+demonstrates the point that a provider swap is a different HTTP call and nothing else. The cost
+is that the retry loop and the error handling are hand-rolled, and they are the parts most likely
+to be wrong, which is why they are the parts with tests.
+
+In production with more than one caller, the SDK is the right choice.
+
+### 384 dimensions, not 1536
+
+`text-embedding-3-small` returns 1536 dimensions by default; the pgvector column is
+`vector(384)` to match `all-MiniLM-L6-v2`. Rather than migrate the schema or maintain two, the
+request asks Azure for 384 directly — the `text-embedding-3` models are trained so a truncated
+prefix of the vector is still a usable embedding, and the API exposes that as a `dimensions`
+parameter.
+
+A deployment of an older embedding model ignores that parameter and returns 1536 anyway. The
+embedder checks the width it got and raises, because the alternative is a `pgvector` type error
+several frames away with nothing in it about embeddings.
+
+### The mixed-vector-store trap
+
+This is the failure this change introduces, and it is the same shape as the IVFFlat trap above:
+**the wrong answer looks exactly like the right one.**
+
+Both embedders emit 384 unit-length floats. Load half a table with one and half with the other
+and Postgres accepts every row, the query planner is happy, cosine similarity returns numbers
+between 0 and 1, and the analyst app shows five similar cases. They are not similar cases. The
+two embedders occupy unrelated vector spaces, so the similarity scores are arithmetic about
+nothing, and there is no symptom — no error, no warning, no implausible value.
+
+So the rule is mechanical rather than advisory. Each row records the embedder that wrote it, and
+`CaseStore.find_similar` refuses to run when the store holds vectors from an embedder other than
+the one configured. Changing `EMBEDDING_PROVIDER` means `make load-cases` again.
+
+Rows written before the column existed are marked `unknown` and do not block retrieval — a
+migration artefact should not break a working store, and the `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS` next to the schema is what upgrades one in place.
+
+### Failure modes that only exist on the hosted path
+
+Three things can happen to a hosted call that cannot happen to a local one, and each is handled
+explicitly rather than left to surface as a confusing parse error:
+
+- **429 throttling.** Normal traffic on a small deployment, not an outage. Retried up to twice,
+  honouring the `Retry-After` header when Azure sends one.
+- **The content filter.** Returns HTTP 200 with a null message and
+  `finish_reason: "content_filter"`. Fraud case text — amounts, card fragments, merchant names,
+  descriptions of criminal activity — is exactly what trips one. It raises, and `summarise_case`
+  degrades to facts plus SHAP reasons, which is the same fallback as any other failure.
+- **A wrong deployment name.** Azure deployments are named by whoever created them and often do
+  not match the model name, so a 404 here is common and says very little. `make llm-check` makes
+  one tiny request to each configured provider so this is found in two seconds rather than forty
+  minutes into an evaluation run.
+
+### Keeping the key out of everything
+
+`AZURE_OPENAI_API_KEY` is a Pydantic `SecretStr`, so it does not appear in a settings repr, a log
+line, or a Streamlit traceback on a page an analyst is looking at. `.env.example` ships the key
+as an empty value and `.env` is gitignored. The config raises at startup when a provider is set
+to `azure_openai` without an endpoint and key, because the alternative is discovering it thirty
+seconds into a demo when the first flagged payment fails to summarise.
+
+### What has and has not been run
+
+The Azure path has been exercised over real HTTP against a local stub of the Azure REST API —
+URL construction, the `api-key` header, `response_format: json_object`, batching, index
+reordering, the 401 and 429 paths, and a full `summarise_case` through to a grounded summary.
+
+It has **not** been run against a real Azure deployment. The request shapes are pinned by tests,
+not by a live call, and the README says so. The local path is the one that has been exercised
+end to end.
+
 ## Decisions already taken for later phases
 
 Recorded here so the reasoning is not lost; the implementation arrives with its phase.

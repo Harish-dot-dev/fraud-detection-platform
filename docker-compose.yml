@@ -200,10 +200,14 @@ services:
   # --- Local LLM ------------------------------------------------------------
   # The model itself is NOT baked into the image. After `make up-ai`, run
   # `make ollama-pull` once to download llama3.2:3b (~2 GB) into the volume.
+  #
+  # In "ai" and "local-llm" so that LLM_PROVIDER=azure_openai can bring up the
+  # case store without also starting a 4 GB model server nothing will talk to.
+  # `make up-ai` starts both; `make up-ai-hosted` starts pgvector alone.
   ollama:
     image: ollama/ollama:0.5.4
     container_name: fraud-ollama
-    profiles: ["ai"]
+    profiles: ["ai", "local-llm"]
     ports:
       - "11434:11434"
     volumes:
@@ -221,7 +225,9 @@ services:
   pgvector:
     image: pgvector/pgvector:0.8.0-pg16
     container_name: fraud-pgvector
-    profiles: ["ai"]
+    # In "hosted" too: the case store is needed whichever provider writes the
+    # vectors, so it is the one AI service that both paths start.
+    profiles: ["ai", "hosted"]
     environment:
       POSTGRES_DB: ${PGVECTOR_DB:-fraud_cases}
       POSTGRES_USER: ${PGVECTOR_USER:-fraud}

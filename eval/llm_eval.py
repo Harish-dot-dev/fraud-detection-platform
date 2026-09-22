@@ -318,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     store = None
     embedder_name = "none"
     if not args.no_retrieval:
-        embedder = build_embedder(settings.embedding_model, allow_stub=args.allow_stub_embedder)
+        embedder = build_embedder(settings, allow_stub=args.allow_stub_embedder)
         embedder_name = embedder.name
         store = CaseStore(
             connect(
@@ -339,9 +339,15 @@ def main(argv: list[str] | None = None) -> int:
             "measure the evaluation code, not any model."
         )
     else:
-        from genai.summarise import OllamaGenerator
+        from genai.summarise import build_generator
 
-        generator = OllamaGenerator(settings.ollama_base_url, settings.ollama_model)
+        generator = build_generator(settings)
+        if settings.uses_paid_provider:
+            # Stated up front because this is the one command in the repository
+            # that spends money, and the amount scales with --cases.
+            logger.warning(
+                "using %s: this run calls a paid API for %s cases", generator.name, len(cases)
+            )
 
     if embedder_name == "hashing-stub":
         note = (note + " " if note else "") + (

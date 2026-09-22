@@ -149,6 +149,62 @@ analyst who sees no summary knows where they stand; one who sees an invented fig
 The evaluation (`eval/llm_eval.py`) measures factual accuracy, schema validity, retrieval quality
 (do the retrieved cases share the outcome?) and latency, over a fixed set of flagged cases.
 
+## Swapping the LLM provider, and the one thing that breaks
+
+**The likely question: "You've used Ollama locally — how would this work with a real provider like
+Azure OpenAI?"**
+
+It already does. `LLM_PROVIDER=azure_openai` in `.env`, and nothing else changes.
+
+That is worth unpacking, because the answer is not "I wrote an adapter" — it is that the shape was
+right before the second provider existed. `genai/summarise.py` defines a `SummaryGenerator`
+Protocol with one method; `genai/embeddings.py` defines an `Embedder` Protocol with one method.
+Both had two implementations from day one — a real one and a deterministic one for tests — so the
+code above them was already written to not care. Adding Azure meant one more class behind each
+Protocol and a factory. `summarise_case`, the Pydantic validation, the grounding check, the repair
+attempt, the eval harness and the analyst app were untouched.
+
+The point to make is the second-order one: **the grounding checks matter more, not less, with a
+better model.** A stronger model invents more fluently. `check_grounding` still refuses any number
+that is not in the facts and any case id that was not retrieved, and a summary that fails is still
+withheld entirely. The safety property is in the pipeline, not in the model.
+
+### What actually differs between the two
+
+Three failure modes exist on a hosted call and not on a local one:
+
+- **429 throttling.** A small Azure deployment throttles under entirely normal traffic — it is a
+  quota, not an outage. Retried twice, honouring `Retry-After`.
+- **The content filter.** Returns HTTP 200 with a null message and
+  `finish_reason: "content_filter"`. Fraud text — amounts, merchant names, descriptions of
+  criminal activity — is exactly what trips one. Handled explicitly, and the app degrades to facts
+  plus SHAP reasons.
+- **Deployment names.** Azure addresses a *deployment*, not a model, and the two usually differ.
+  A 404 here means almost nothing on its own, which is why `make llm-check` exists.
+
+### The trap worth volunteering
+
+If they ask what went wrong, this is the good answer, because it is the one with no symptom.
+
+`all-MiniLM-L6-v2` produces 384-dimensional vectors. `text-embedding-3-small` produces 1536 — but
+it can be asked for 384, because the `text-embedding-3` models are trained so a truncated prefix
+is still a usable embedding. So both providers write 384 unit-length floats into the same
+`vector(384)` column, which is convenient and also the problem.
+
+Load half the store with one embedder and half with the other, and **nothing fails.** Postgres
+accepts every row. The cosine distance operator returns numbers between 0 and 1. The analyst app
+shows five similar cases. They are not similar cases — the two embedders occupy unrelated vector
+spaces, so those similarity scores are arithmetic about nothing. There is no error, no warning,
+and no implausible value to notice.
+
+So the fix is mechanical rather than a note in a README: each row stores the name of the embedder
+that wrote it, and `find_similar` raises if the store holds vectors from a different one. Changing
+the embedding provider forces a reload.
+
+This is the same shape as the IVFFlat bug earlier in this project and the SHAP one before it — the
+failures that cost real time here were never crashes. They were the runs that completed
+successfully and returned something wrong.
+
 ## Choosing the thresholds
 
 There is no statistically correct place to put a threshold — only a business one. So the operating

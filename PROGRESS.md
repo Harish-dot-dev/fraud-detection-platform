@@ -15,6 +15,76 @@ phase.
 | 8. GenAI assistant | ✅ done (except the model calls) |
 | 9. Analyst app and dashboard | ✅ done (Superset unverified) |
 | 10. Polish | ✅ done |
+| + Azure OpenAI provider | ✅ done (not run against a real deployment) |
+
+---
+
+## Azure OpenAI provider ✅
+
+Added after phase 10, at your request. The assistant now runs against either a local model or a
+hosted Azure OpenAI deployment, chosen by two lines in `.env`.
+
+### What is in place
+
+- **`LLM_PROVIDER`** (`ollama` | `azure_openai`) and **`EMBEDDING_PROVIDER`**
+  (`sentence_transformers` | `azure_openai`), independent of each other.
+- **`AzureOpenAIGenerator`** and **`AzureOpenAIEmbedder`**, behind the `SummaryGenerator` and
+  `Embedder` Protocols that already existed. Nothing in `summarise_case`, the grounding checks,
+  the eval harness or the analyst app knows which provider it got.
+- **`build_generator(settings)` / `build_embedder(settings)`** — the four call sites now ask for
+  a provider rather than constructing one.
+- **`make llm-check`** — one tiny request to each configured provider, so a wrong deployment name
+  is found in two seconds rather than forty minutes into `make llm-eval`.
+- **`make up-ai-hosted`** — core + pgvector without the 4 GB ollama container.
+- **24 new tests** in `tests/test_providers.py`. No network and no subscription needed.
+
+### The default is unchanged and still free
+
+`LLM_PROVIDER=ollama` remains the default, so a clone of this repository runs with no Azure
+subscription and no bill. That was a deliberate constraint, not an oversight: a portfolio project
+that only works with someone else's paid credentials cannot be looked at by the person you want
+looking at it.
+
+### The trap this introduced, and what stops it
+
+Both embedders emit 384 unit-length floats, so a table holding vectors from both is accepted by
+Postgres, returns similarity scores between 0 and 1, and shows five plausible "similar cases"
+that are not similar to anything. No error, no warning, no implausible value.
+
+Each row now records the embedder that wrote it, and retrieval refuses to run against a
+mismatched store. **Changing `EMBEDDING_PROVIDER` means `make load-cases` again.** Rows from
+before the column existed are marked `unknown` and do not block retrieval; the schema carries an
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so an existing store upgrades in place.
+
+### Verified
+
+- `make lint` — clean.
+- `make test` — full fast suite green, including the 24 new provider tests.
+- The Azure path exercised over **real HTTP against a local stub of the Azure REST API**: URL
+  construction, the `api-key` header, `response_format: json_object`, 64-item batching, response
+  reordering by `index`, the 401 and 429 paths, and a full `summarise_case` through to a valid,
+  grounded summary (182 ms, `azure/gpt-4o-mini`).
+- `make llm-check` against that stub: both providers OK, 384 dimensions.
+- A wrong key fails fast with a 401 rather than being retried into a bill.
+
+### Not verified
+
+- **No call has been made to a real Azure OpenAI deployment.** The request shapes are pinned by
+  tests against a stub I wrote, which means they are pinned to my reading of the API docs. Run
+  `make llm-check` once with real credentials — that is the two-second version of this check.
+- Costs are unmeasured. Nothing in the README claims a cost figure.
+
+### If you set it up
+
+1. Create an Azure OpenAI resource, deploy a chat model and an embedding model, and note the
+   **deployment** names — they are chosen by you and often differ from the model names.
+2. `cp .env.example .env`, fill in the endpoint, key and deployment names, set both providers.
+3. `make llm-check` — confirm both answer before spending anything.
+4. `make load-cases` — the vector store must be rebuilt with whichever embedder you chose.
+5. `make llm-eval` — fills the four assistant rows in the README results table with the provider
+   name recorded alongside them.
+
+**Never commit the key.** `.env` is gitignored; `.env.example` ships an empty value.
 
 ---
 
