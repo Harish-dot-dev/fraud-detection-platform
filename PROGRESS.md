@@ -67,6 +67,19 @@ before the column existed are marked `unknown` and do not block retrieval; the s
 - `make llm-check` against that stub: both providers OK, 384 dimensions.
 - A wrong key fails fast with a 401 rather than being retried into a bill.
 
+### Housekeeping, and one thing left for you to decide
+
+`mlruns/` is now gitignored. Every run of the training tests writes an XGBoost
+artefact there, and those were dirtying `git status` after each test run.
+
+**But ~444 of them were already committed during phases 5-9**, roughly 12 MB of model binaries.
+`.gitignore` does not untrack files, so they are still in the repository. They carry no
+`meta.yaml`, which means MLflow cannot list them as runs — they are build output that happened to
+get committed, not results anybody can use.
+
+Worth removing (`git rm -r --cached mlruns/`) before you show this repo to anyone, but that
+rewrites nothing and is easily reversed, so it is your call rather than mine.
+
 ### Not verified
 
 - **No call has been made to a real Azure OpenAI deployment.** The request shapes are pinned by

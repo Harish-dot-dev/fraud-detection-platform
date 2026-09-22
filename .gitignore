@@ -247,3 +247,14 @@ airflow/airflow.db
 airflow/airflow.cfg
 
 # Ruff / pytest caches are covered by the Python defaults above.
+
+# MLflow local tracking store
+# Every run of the training tests writes a model artefact here. They carry no
+# meta.yaml, so MLflow cannot even list them as runs - they are build output,
+# not results, and the real tracking store is the mlflow container's volume.
+# Ignoring them keeps `git status` honest about what actually changed.
+#
+# Note: ~444 of these were committed during phases 5-9 before this rule
+# existed. .gitignore does not untrack files, so those stay until they are
+# removed deliberately (see PROGRESS.md).
+mlruns/
