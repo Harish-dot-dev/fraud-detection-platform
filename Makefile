@@ -8,6 +8,10 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 VENV := .venv
+# Which interpreter builds the venv. Override it when the system python is not
+# 3.11, which is the case on Ubuntu 24.04 (3.12) and recent Fedora:
+#   make install PYTHON_BIN=python3.11
+PYTHON_BIN ?= python3
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 COMPOSE := docker compose
@@ -29,15 +33,29 @@ help: ## Show this help
 
 env: ## Create .env from .env.example (never overwrites an existing .env)
 	@if [ -f .env ]; then \
-	@  echo ".env already exists - leaving it alone."; \
-	@else \
-	@  cp .env.example .env; \
-	@  echo "Created .env. Generate a PII salt with:"; \
-	@  echo '  python -c "import secrets; print(secrets.token_hex(32))"'; \
-	@fi
+	  echo ".env already exists - leaving it alone."; \
+	else \
+	  cp .env.example .env; \
+	  echo "Created .env. Generate a PII salt with:"; \
+	  echo '  python -c "import secrets; print(secrets.token_hex(32))"'; \
+	fi
 
 install: ## Create the local virtualenv and install dev + ml dependencies
-	python3 -m venv $(VENV)
+	@# Checked before the venv is built, not after. pyproject pins
+	@# requires-python = ">=3.11,<3.12" because PySpark 3.5 and numpy<2 do not
+	@# support 3.12, and the failure otherwise arrives as an opaque pip
+	@# resolution error on a venv that has already been created.
+	@$(PYTHON_BIN) -c 'import sys; v=sys.version_info; \
+	  sys.exit(0) if (v.major, v.minor) == (3, 11) else \
+	  (print(f"Python 3.11 required, found {v.major}.{v.minor}."), \
+	   print(""), \
+	   print("Ubuntu 24.04 ships 3.12. Install 3.11 alongside it:"), \
+	   print("  sudo add-apt-repository ppa:deadsnakes/ppa"), \
+	   print("  sudo apt update && sudo apt install python3.11 python3.11-venv python3.11-dev"), \
+	   print(""), \
+	   print("Then: make install PYTHON_BIN=python3.11"), \
+	   sys.exit(1))'
+	$(PYTHON_BIN) -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[ml,dev]"
 	@echo ""
