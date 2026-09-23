@@ -50,6 +50,12 @@ FIXTURE_IDENTITY = REPO_ROOT / "tests" / "fixtures" / "train_identity_sample.csv
 # Sleeping for less than this is not worth the syscall; the schedule absorbs it.
 MIN_SLEEP_SECONDS = 0.001
 
+# How many identity rows to hold in memory at once while indexing. The real
+# file is 144,233 rows wide by 41 columns; reading it whole and converting it
+# to Python dicts costs more memory than everything else the producer does put
+# together. See load_source.
+IDENTITY_CHUNK_ROWS = 50_000
+
 
 class EventSink(Protocol):
     """Anywhere a payment event can be written."""
@@ -160,10 +166,21 @@ def load_source(
 
     identity_index: dict[int, dict[str, Any]] = {}
     if identity_path is not None and identity_path.exists():
-        identity = pd.read_csv(identity_path)
-        identity_index = {
-            int(row["TransactionID"]): row for row in identity.to_dict(orient="records")
-        }
+        # Only the identities belonging to the transactions actually loaded,
+        # read in chunks so the file never lands in memory whole.
+        #
+        # This used to read the entire identity file and call
+        # to_dict("records") on it, which builds one Python dict of ~41 keys
+        # per row - 144,233 of them on the real dataset, about 1.5-2 GB at
+        # peak, and it happened whatever --limit was set to. On the 1000-row
+        # test fixture that is invisible; on the real file it gets the process
+        # killed by the OOM killer before a single event is produced.
+        wanted = set(transactions["TransactionID"].astype("int64"))
+        for chunk in pd.read_csv(identity_path, chunksize=IDENTITY_CHUNK_ROWS):
+            matching = chunk[chunk["TransactionID"].isin(wanted)]
+            identity_index.update(
+                {int(row["TransactionID"]): row for row in matching.to_dict(orient="records")}
+            )
     return transactions, identity_index
 
 
