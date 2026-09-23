@@ -1,0 +1,51 @@
+# Everything here is excluded from the Docker build context.
+#
+# Without this file the context was 2.84 GB and took 78 seconds to transfer on
+# every single build, because it swept up the Kaggle CSVs, the local
+# virtualenv and the whole git history - none of which any image needs.
+
+# The dataset. ~1.4 GB, and the containers read it from a bind mount, not from
+# the image.
+data/
+
+# Local virtualenv. Built for the host's Python; the images install their own.
+.venv/
+venv/
+
+# Generated state, all of it bind-mounted or regenerated in the container.
+mlruns/
+reports/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+airflow/logs/
+airflow/airflow.db
+*.duckdb
+
+# Version control and CI.
+.git/
+.github/
+.gitignore
+
+# Caches and build artifacts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Editor and OS noise.
+.vscode/
+.idea/
+.DS_Store
+
+# Secrets must never enter an image layer. .env.example is committed and
+# carries no key; .env is the one with the real salt in it.
+.env
+
+# Notes and screenshots.
+*.md
+!README.md

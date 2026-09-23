@@ -22,12 +22,12 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-RUN mkdir -p features serving producer streaming training genai eval common \
-    && touch features/__init__.py serving/__init__.py producer/__init__.py \
-       streaming/__init__.py training/__init__.py genai/__init__.py eval/__init__.py \
-       common/__init__.py \
-    && pip install --no-cache-dir ".[spark,quality,ml]"
+COPY pyproject.toml README.md docker/stub_packages.py ./
+# See docker/stub_packages.py: the package list is read from pyproject rather
+# than duplicated here, so it cannot drift out of sync again.
+RUN python stub_packages.py \
+    && pip install --no-cache-dir ".[spark,quality,ml]" \
+    && rm stub_packages.py
 
 # Resolve the Delta and Kafka connector jars at build time so that starting a
 # job does not depend on Maven Central being reachable (and does not spend the

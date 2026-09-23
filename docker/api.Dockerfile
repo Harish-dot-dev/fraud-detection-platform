@@ -20,12 +20,14 @@ WORKDIR /app
 
 # Copy only the dependency manifest first so that Docker's layer cache survives
 # ordinary source edits.
-COPY pyproject.toml README.md ./
-# The package directories must exist for setuptools to resolve the project.
-RUN mkdir -p features serving producer streaming training genai eval \
-    && touch features/__init__.py serving/__init__.py producer/__init__.py \
-       streaming/__init__.py training/__init__.py genai/__init__.py eval/__init__.py \
-    && pip install --no-cache-dir ".[ml,app]" "psycopg[binary]==3.2.3" "pgvector==0.3.6"
+COPY pyproject.toml README.md docker/stub_packages.py ./
+# setuptools requires every directory in [tool.setuptools] packages to exist,
+# even for a dependency-only install. The list is read from pyproject rather
+# than repeated here, because repeating it is what broke this build for six
+# phases - see docker/stub_packages.py.
+RUN python stub_packages.py \
+    && pip install --no-cache-dir ".[ml,app]" "psycopg[binary]==3.2.3" "pgvector==0.3.6" \
+    && rm stub_packages.py
 
 COPY . .
 
