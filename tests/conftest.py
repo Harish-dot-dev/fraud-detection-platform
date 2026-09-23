@@ -113,16 +113,35 @@ def pytest_collection_modifyitems(config, items):
     of erroring, and the dedicated CI jobs - which do provide the service -
     still run them for real.
     """
-    import importlib.util
+    import importlib.metadata
     import os
 
     import pytest as _pytest
 
-    def _module_available(name: str) -> bool:
-        return importlib.util.find_spec(name) is not None
+    def _installed(distribution: str) -> bool:
+        """Is a distribution actually installed?
+
+        Deliberately not ``importlib.util.find_spec``. A bare directory on
+        sys.path is importable as a PEP 420 namespace package, and this
+        repository has a ``dbt/`` directory at its root holding the dbt
+        project. So ``find_spec("dbt")`` matched that folder and reported
+        dbt-core as present on a machine that had never installed it: the
+        tests were not skipped, the subprocess call to ``dbt.cli.main`` failed,
+        and the fixture asserted. It went unnoticed because dbt is installed
+        in the machine this was written on and CI runs those tests in a
+        dedicated job that installs it too.
+
+        The metadata store answers the question actually being asked - "is the
+        package installed" - and cannot be shadowed by a directory name.
+        """
+        try:
+            importlib.metadata.distribution(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            return False
+        return True
 
     def _pgvector_available() -> bool:
-        if not _module_available("psycopg"):
+        if not _installed("psycopg"):
             return False
         try:
             import psycopg
@@ -140,8 +159,13 @@ def pytest_collection_modifyitems(config, items):
             return False
 
     requirements = {
-        "needs_spark": (lambda: _module_available("pyspark"), "pyspark is not installed"),
-        "needs_dbt": (lambda: _module_available("dbt"), "dbt is not installed"),
+        "needs_spark": (lambda: _installed("pyspark"), "pyspark is not installed"),
+        # dbt-core, not "dbt": the import name is a namespace package that the
+        # repository's own dbt/ directory satisfies. See _installed above.
+        "needs_dbt": (
+            lambda: _installed("dbt-core"),
+            "dbt-core is not installed (pip install -e '.[dbt]')",
+        ),
         "needs_pgvector": (_pgvector_available, "no Postgres with pgvector is reachable"),
         "needs_ollama": (
             lambda: os.environ.get("OLLAMA_AVAILABLE") == "1",
