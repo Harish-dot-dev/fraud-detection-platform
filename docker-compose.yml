@@ -115,9 +115,17 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-    # Spark's JVM plus a local executor. The single biggest consumer in the
-    # core profile, and the first thing to cut on a smaller machine.
-    mem_limit: 3072m
+    # Spark's JVM plus a local executor, and also the container the producer
+    # and the training job run in.
+    #
+    # 3072m was sized against the 1000-row test fixture and is not enough for
+    # the real dataset: train_transaction.csv is 590,540 rows by 394 columns,
+    # so the DataFrame alone is around 2 GB before any work happens. The
+    # producer was killed at the old limit (exit code 137).
+    #
+    # Overridable, because this is the first thing to cut on a smaller machine:
+    #   SPARK_MEM_LIMIT=3072m make up
+    mem_limit: ${SPARK_MEM_LIMIT:-5g}
     restart: unless-stopped
 
   # --- Online feature store -------------------------------------------------

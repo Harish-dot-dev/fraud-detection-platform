@@ -215,7 +215,19 @@ def iter_payment_events(
     identity_index = identity_index or {}
     epoch = epoch or parse_epoch(get_settings().synthetic_epoch)
 
-    for row in transactions.to_dict(orient="records"):
+    # One row at a time, not transactions.to_dict(orient="records").
+    #
+    # to_dict builds the entire list of row dicts before returning, so calling
+    # it inside a generator defeats the point of the generator: 590,540 dicts
+    # of ~55 keys were allocated before the first event was yielded, which
+    # killed the producer container at its 3 GB limit (make exit code 137).
+    #
+    # itertuples streams. Each dict is built, yielded, and collected before the
+    # next one exists, so peak memory is the DataFrame plus one row rather than
+    # the DataFrame plus a Python copy of all of it.
+    columns = list(transactions.columns)
+    for values in transactions.itertuples(index=False, name=None):
+        row = dict(zip(columns, values, strict=True))
         transaction_id = int(row["TransactionID"])
         yield payment_event_from_row(row, identity_index.get(transaction_id), epoch=epoch)
 

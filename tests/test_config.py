@@ -44,6 +44,7 @@ def test_env_example_has_no_unused_keys() -> None:
         "superset_admin",
         "superset_password",
         "superset_secret_key",
+        "spark_mem_limit",
     }
     unused = _env_example_keys() - set(Settings.model_fields) - compose_only
 
