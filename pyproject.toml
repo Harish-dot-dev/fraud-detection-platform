@@ -60,6 +60,12 @@ genai = [
     "psycopg[binary]==3.2.3",
     "pgvector==0.3.6",
 ]
+# Fetching the IEEE-CIS dataset. Its own extra rather than a core dependency:
+# the tests and CI run on the committed synthetic fixture, so nobody needs a
+# Kaggle account to work on this repository.
+data = [
+    "kaggle==1.6.17",
+]
 # Data quality suites.
 quality = [
     "great-expectations==0.18.22",

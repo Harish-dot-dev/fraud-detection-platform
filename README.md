@@ -161,7 +161,10 @@ repository. You need to accept the competition rules and use your own API token:
 
 1. Accept the rules at <https://www.kaggle.com/competitions/ieee-fraud-detection/rules>
 2. Create a token at <https://www.kaggle.com/settings> and save it to `~/.kaggle/kaggle.json`
-3. `make data`
+   (`chmod 600` it), or write the file yourself — it is one line:
+   `{"username":"...","key":"..."}`
+3. Install the downloader, which is an opt-in extra: `pip install -e '.[data]'`
+4. `make data`
 
 Or download the ZIP by hand and unzip `train_transaction.csv` and `train_identity.csv` into
 `data/raw/`.

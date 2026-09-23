@@ -52,15 +52,34 @@ MSG
   exit 1
 fi
 
-if ! command -v kaggle >/dev/null 2>&1; then
-  echo "Kaggle CLI not found. Install it with:  pip install kaggle==1.6.17" >&2
+# Prefer the project's own virtualenv over whatever is on PATH. `make data`
+# runs without the venv activated, so requiring an activated shell here is a
+# trap: the CLI gets installed into .venv and then is not found.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -x "$REPO_ROOT/.venv/bin/kaggle" ]]; then
+  KAGGLE="$REPO_ROOT/.venv/bin/kaggle"
+elif command -v kaggle >/dev/null 2>&1; then
+  KAGGLE="kaggle"
+else
+  cat >&2 <<'MSG'
+ERROR: the Kaggle CLI is not installed.
+
+It is an optional extra, because the tests and CI run on the committed
+synthetic fixture and need no Kaggle account. Install it with:
+
+    pip install -e '.[data]'
+
+or, if you are not using the project's virtualenv:
+
+    pip install kaggle==1.6.17
+MSG
   exit 1
 fi
 
 echo "Downloading ${COMPETITION} into ${RAW_DIR} (about 1.4 GB unzipped)..."
 for f in "${REQUIRED_FILES[@]}"; do
   echo "  -> $f"
-  kaggle competitions download -c "$COMPETITION" -f "$f" -p "$RAW_DIR"
+  "$KAGGLE" competitions download -c "$COMPETITION" -f "$f" -p "$RAW_DIR"
 done
 
 # The CLI delivers single files zipped when they are large.
