@@ -19,7 +19,7 @@ COMPOSE := docker compose
 .PHONY: help env install lint fmt test test-all sample data up up-ai up-ai-hosted down ps logs \
 	      produce produce-preview topics stream-logs stream-once stream-local bronze-peek \
 	      silver gold quality features labels dataset train consume load-test demo-api \
-	      export dbt drift decisions-sink warehouse airflow airflow-logs \
+	      export dbt drift decisions-sink warehouse airflow airflow-logs produce-host \
 	      load-cases llm-eval app publish dashboard readme-metrics metrics \
 	      clean clean-data ollama-pull llm-check
 
@@ -120,6 +120,13 @@ llm-check: ## Verify the configured LLM + embedding providers answer (cheap)
 ##@ Pipeline
 
 produce: ## Replay payments onto Kafka. e.g. make produce ARGS="--limit 500 --speedup 0"
+	@# Runs in the container, like every other pipeline step. It used to run on
+	@# the host against the published port, which is the one listener whose
+	@# reachability depends on the host's Docker networking rather than on the
+	@# broker being up.
+	$(COMPOSE) run --rm spark python -m producer.replay $(ARGS)
+
+produce-host: ## Replay from the host venv instead (needs the published port on 29092)
 	$(PY) -m producer.replay $(ARGS)
 
 produce-preview: ## Print a few payment events without touching Kafka

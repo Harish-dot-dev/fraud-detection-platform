@@ -56,6 +56,28 @@ MIN_SLEEP_SECONDS = 0.001
 # together. See load_source.
 IDENTITY_CHUNK_ROWS = 50_000
 
+# Docker creates this file inside every container. Nothing else does.
+DOCKER_MARKER = Path("/.dockerenv")
+
+
+def default_bootstrap_servers() -> str:
+    """Pick the Kafka listener that is actually reachable from here.
+
+    The broker publishes two: ``kafka:9092`` on the compose network and
+    ``localhost:29092`` through a published port. Which one works depends on
+    which side of the container boundary the caller is on, and hardwiring
+    either is wrong half the time - this defaulted to the host listener, so
+    running the producer inside the network failed, and running it from the
+    host failed too on any machine where the published port did not behave.
+
+    Docker creates /.dockerenv in every container, so the question is
+    answerable rather than guessable.
+    """
+    settings = get_settings()
+    if DOCKER_MARKER.exists():
+        return settings.kafka_bootstrap_servers
+    return settings.kafka_bootstrap_servers_host
+
 
 class EventSink(Protocol):
     """Anywhere a payment event can be written."""
@@ -263,8 +285,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--topic", default=settings.kafka_topic_payments)
     parser.add_argument(
         "--bootstrap-servers",
-        default=settings.kafka_bootstrap_servers_host,
-        help="Kafka bootstrap servers (default: the host listener)",
+        default=None,
+        help="Kafka bootstrap servers (default: kafka:9092 inside the compose "
+        "network, localhost:29092 from the host)",
     )
     parser.add_argument(
         "--speedup",
@@ -300,7 +323,13 @@ def main(argv: list[str] | None = None) -> int:
                 transactions_path.name,
             )
 
-    transactions, identity_index = load_source(transactions_path, identity_path)
+    # --limit bounds the read, not just the emit loop. Without this the
+    # producer loaded all 590,540 transactions and all 144,233 identity rows
+    # before sending five thousand of them - several GB and a minute of work to
+    # produce a smoke test. `or None` because 0 means "no limit" in .env.
+    transactions, identity_index = load_source(
+        transactions_path, identity_path, limit=args.limit or None
+    )
     logger.info(
         "loaded %s transactions and %s identity records from %s",
         len(transactions),
@@ -319,11 +348,12 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(json.loads(value), indent=2)[:800])
             print("-" * 60)
     else:
-        kafka_sink = KafkaSink(args.bootstrap_servers, args.topic)
+        bootstrap_servers = args.bootstrap_servers or default_bootstrap_servers()
+        kafka_sink = KafkaSink(bootstrap_servers, args.topic)
         logger.info(
             "publishing to topic %r at %s (speedup=%s)",
             args.topic,
-            args.bootstrap_servers,
+            bootstrap_servers,
             args.speedup,
         )
         stats = replay(events, kafka_sink, speedup=args.speedup, max_events=args.limit)

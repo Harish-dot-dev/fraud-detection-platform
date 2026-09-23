@@ -177,3 +177,61 @@ def test_identity_is_joined_onto_matching_transactions() -> None:
     with_device = [e for e in events if e.device_type is not None]
     assert 0 < len(with_device) < len(events)
     assert len(with_device) == len(identity_index)
+
+
+# --- which Kafka listener the producer talks to -----------------------------
+
+
+class _Marker:
+    """Stands in for /.dockerenv."""
+
+    def __init__(self, present: bool) -> None:
+        self._present = present
+
+    def exists(self) -> bool:
+        return self._present
+
+
+def test_bootstrap_servers_default_differs_inside_a_container(monkeypatch) -> None:
+    """The broker publishes two listeners and only one works from each side.
+
+    `make produce` used to run on the host against the published port, which
+    is the listener whose reachability depends on the host's Docker
+    networking rather than on the broker being up. It now runs in the
+    container like every other pipeline step, so the default has to follow.
+    """
+    from producer import replay
+
+    monkeypatch.setattr(replay, "DOCKER_MARKER", _Marker(False))
+    assert replay.default_bootstrap_servers() == "localhost:29092"
+
+    monkeypatch.setattr(replay, "DOCKER_MARKER", _Marker(True))
+    assert replay.default_bootstrap_servers() == "kafka:9092"
+
+
+def test_limit_bounds_the_read_not_just_the_emit(tmp_path) -> None:
+    """--limit used to be applied only to the emit loop.
+
+    The whole 652 MB transaction file and all 144,233 identity rows were read
+    first, so a five-thousand-event smoke test cost the same memory as a full
+    run. Invisible on the 1000-row fixture, fatal on the real dataset.
+    """
+    import pandas as pd
+
+    from producer.replay import load_source
+
+    transactions = pd.DataFrame(
+        {
+            "TransactionID": range(1000, 1100),
+            "TransactionDT": range(100),
+            "TransactionAmt": [10.0] * 100,
+        }
+    )
+    identity = pd.DataFrame({"TransactionID": range(1000, 1100), "DeviceType": ["desktop"] * 100})
+    transactions.to_csv(tmp_path / "t.csv", index=False)
+    identity.to_csv(tmp_path / "i.csv", index=False)
+
+    loaded, index = load_source(tmp_path / "t.csv", tmp_path / "i.csv", limit=10)
+
+    assert len(loaded) == 10, "the transaction read must respect the limit"
+    assert len(index) == 10, "only the identities of the loaded rows should be indexed"
